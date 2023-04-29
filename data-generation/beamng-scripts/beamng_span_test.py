@@ -21,7 +21,7 @@ def get_random_vehicle(name: str, model_names: list):
             )
     
 def run_iteration(
-    iteration: str,
+    iteration: int,
     iteration_duration_in_seconds: int,
     vehicle_model_names: list,
     number_of_vehicles: int,
@@ -34,7 +34,7 @@ def run_iteration(
 
     print('Iteration:', iteration)
     scenario = Scenario('west_coast_usa', 'advanced_IMU_demo', description='Spanning the map with an advanced IMU sensor')
-    vehicle_main_name = 'vehicle_' + iteration + '_main'
+    vehicle_main_name = 'vehicle_' + str(iteration) + '_main'
     vehicle_main = get_random_vehicle(vehicle_main_name, vehicle_model_names)
 
     scenario.add_vehicle(vehicle_main, pos=(-717.121, 101, 118.675), rot_quat=(0, 0, 0.3826834, 0.9238795))
@@ -66,7 +66,7 @@ def run_iteration(
     vehicles_in_scenario = {}
     print(road_edges)
     for r_id, r_edges in road_edges.items():
-        vehicle_name = 'vehicle_' + iteration + '_' + r_id
+        vehicle_name = 'vehicle_' + str(iteration) + '_' + r_id
         vehicle = get_random_vehicle(vehicle_name, vehicle_model_names)
         middle = r_edges[int(len(r_edges) / 2)]['middle']
         scenario.add_vehicle(
@@ -84,16 +84,22 @@ def run_iteration(
     scenario.update()
     bng.scenario.start()
 
-    vehicle_main_imu_name = 'vehicle_' + iteration + '_main_imu'
+    vehicle_main_imu_name = 'vehicle_' + str(iteration) + '_main_imu'
     imu_vehicles = {vehicle_main_imu_name: vehicle_main_name}
 
     imu_update_time = 0.01
     imus = [AdvancedIMU(vehicle_main_imu_name, bng, vehicle_main, gfx_update_time = imu_update_time)]
     for vehicle_id, vehicle in vehicles_in_scenario.items():
-        vehicle_name = 'vehicle_' + iteration + '_' + vehicle_id
-        vehicle_imu_name = vehicle_name + '_' + iteration + '_imu'
+        vehicle_name = 'vehicle_' + str(iteration) + '_' + vehicle_id
+        vehicle_imu_name = vehicle_name + '_' + str(iteration) + '_imu'
         imu_vehicles[vehicle_imu_name] = vehicle_name
         imus.append(AdvancedIMU(vehicle_imu_name, bng, vehicle, gfx_update_time = imu_update_time))
+        
+    imu_ids = {}
+    counter = 0
+    for imu in imus:
+        imu_ids[imu.name] = iteration * number_of_vehicles + counter
+        counter += 1
         
     print('Driving around, polling the advanced IMU sensor at regular intervals...')
     t0 = time.time()
@@ -103,9 +109,7 @@ def run_iteration(
             for _, item in enumerate(data):
                 writer.writerow(
                     {
-                        'iterationId': iteration,
-                        'imuId': imu.name,
-                        'vehicleId': imu_vehicles[imu.name],
+                        'imuId': imu_ids[imu.name],
                         'time': item['time'],
                         'pos': item['pos'],
                         'dirX': item['dirX'],
@@ -130,7 +134,7 @@ def main():
 
     number_of_vehicles = 10
     iterations = 4
-    iteration_duration_in_seconds = 120
+    iteration_duration_in_seconds = 60
     vehicle_model_names = [
         'autobello',
         'midtruck',
@@ -164,9 +168,7 @@ def main():
     with open(file=csv_name, mode='w', newline='') as csvfile:
         
         fieldnames = [
-            'iterationId',
             'imuId',
-            'vehicleId',
             'time',
             'pos',
             'dirX',
@@ -187,7 +189,7 @@ def main():
 
         for iteration in range(iterations):
             run_iteration(
-                iteration=str(iteration),
+                iteration=iteration,
                 iteration_duration_in_seconds=iteration_duration_in_seconds,
                 vehicle_model_names=vehicle_model_names,
                 number_of_vehicles=number_of_vehicles,
