@@ -1,6 +1,6 @@
 import random
 import time
-import csv
+import pandas as pd
 
 from datetime import datetime
 from beamngpy import BeamNGpy, Scenario, Vehicle, set_up_simple_logging
@@ -10,7 +10,7 @@ def setup_vehicle(vehicle: Vehicle, aggression: float, mode: str = 'span'):
     vehicle.ai.set_mode(mode)
     vehicle.ai.set_aggression(aggression)
     vehicle.ai.drive_in_lane(True)
-    vehicle.ai.set_speed(speed = 130.0, mode = 'limit')
+    vehicle.ai.set_speed(speed = 36.0, mode = 'limit')
     
 def get_random_vehicle(name: str, model_names: list):
     return Vehicle(
@@ -20,12 +20,12 @@ def get_random_vehicle(name: str, model_names: list):
             color='Red'
             )
     
-def run_iteration(
+def generate_data(
     iteration: int,
     iteration_duration_in_seconds: int,
     vehicle_model_names: list,
     number_of_vehicles: int,
-    writer: csv.DictWriter):
+    data: pd.DataFrame):
 
     random.seed(1337 + time.time_ns())
     beamng = BeamNGpy('localhost', 64256)
@@ -57,7 +57,7 @@ def run_iteration(
         road_edges[road_id] = beamng.scenario.get_road_edges(road_id)
     
     aggressions = {}
-    aggressions[vehicle_main_name] = random.uniform(0.2, 1.0)
+    aggressions[vehicle_main_name] = random.uniform(0.2, 0.6)
     setup_vehicle(
         vehicle = vehicle_main,
         aggression = aggressions[vehicle_main_name]
@@ -74,7 +74,7 @@ def run_iteration(
             pos = (middle[0], middle[1] + 0.5, middle[2]),
             rot_quat = (0, 0, 0.3826834, 0.9238795)
             )
-        aggressions[vehicle_name] = random.uniform(0.2, 1.0)
+        aggressions[vehicle_name] = random.uniform(0.2, 0.6)
         setup_vehicle(
             vehicle = vehicle,
             aggression = aggressions[vehicle_name]
@@ -105,36 +105,40 @@ def run_iteration(
     t0 = time.time()
     while time.time() - t0 < iteration_duration_in_seconds:
         for imu in imus:
-            data = imu.poll() # Fetch the latest readings from the sensor.
-            for _, item in enumerate(data):
-                writer.writerow(
+            imu_data = imu.poll() # Fetch the latest readings from the sensor.
+            for _, item in enumerate(imu_data):
+                new_row = pd.DataFrame(
                     {
-                        'imuId': imu_ids[imu.name],
-                        'time': item['time'],
-                        'pos': item['pos'],
-                        'dirX': item['dirX'],
-                        'dirY': item['dirY'],
-                        'dirZ': item['dirZ'],
-                        'angVel': item['angVel'],
-                        'angAccel': item['angAccel'],
-                        'mass': item['mass'],
-                        'accRaw': item['accRaw'],
-                        'accSmooth': item['accSmooth'],
-                        }
-                    )
-
+                        'imuId': [imu_ids[imu.name]],
+                        'vehicleAggression': [aggressions[imu_vehicles[imu.name]]],
+                        'time': [item['time']],
+                        'pos': [item['pos']],
+                        'dirX': [item['dirX']],
+                        'dirY': [item['dirY']],
+                        'dirZ': [item['dirZ']],
+                        'angVel': [item['angVel']],
+                        'angAccel': [item['angAccel']],
+                        'mass': [item['mass']],
+                        'accRaw': [item['accRaw']],
+                        'accSmooth': [item['accSmooth']],
+                    }
+                )
+                data = pd.concat([data, new_row], ignore_index=True)
+                
+    print('IMU data recorded during iteration: ', data.shape[0])
     print('Ended data generation')
     for imu in imus:
         imu.remove()
 
     bng.close()
+    return data
 
 def main():
     set_up_simple_logging()
 
-    number_of_vehicles = 10
-    iterations = 4
-    iteration_duration_in_seconds = 60
+    number_of_vehicles = 16
+    iterations = 10
+    iteration_duration_in_seconds = 120
     vehicle_model_names = [
         'autobello',
         'midtruck',
@@ -164,38 +168,33 @@ def main():
         'wendover'
         ]
     
-    csv_name = 'imu_data_' + datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + '.csv'
-    with open(file=csv_name, mode='w', newline='') as csvfile:
-        
-        fieldnames = [
-            'imuId',
-            'time',
-            'pos',
-            'dirX',
-            'dirY',
-            'dirZ',
-            'angVel',
-            'angAccel',
-            'mass',
-            'accRaw',
-            'accSmooth'
-            ]
-        writer = csv.DictWriter(
-            csvfile,
-            fieldnames=fieldnames,
-            delimiter=';'
-            )
-        writer.writeheader()
+    parquet_name = 'imu_data_' + datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + '.parquet'
+    data = pd.DataFrame(columns=[
+        'imuId',
+        'vehicleAggression',
+        'time',
+        'pos',
+        'dirX',
+        'dirY',
+        'dirZ',
+        'angVel',
+        'angAccel',
+        'mass',
+        'accRaw',
+        'accSmooth'
+        ])
 
-        for iteration in range(iterations):
-            run_iteration(
-                iteration=iteration,
-                iteration_duration_in_seconds=iteration_duration_in_seconds,
-                vehicle_model_names=vehicle_model_names,
-                number_of_vehicles=number_of_vehicles,
-                writer=writer
-                )
-            time.sleep(5.0)
+    for iteration in range(iterations):
+        data = generate_data(
+            iteration=iteration,
+            iteration_duration_in_seconds=iteration_duration_in_seconds,
+            vehicle_model_names=vehicle_model_names,
+            number_of_vehicles=number_of_vehicles,
+            data=data
+            )
+        time.sleep(5.0)
+    
+    data.to_parquet(parquet_name)
 
 if __name__ == '__main__':
     main()
