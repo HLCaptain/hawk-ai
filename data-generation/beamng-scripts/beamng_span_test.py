@@ -136,7 +136,7 @@ def generate_data(
 def main():
     set_up_simple_logging()
 
-    number_of_vehicles = 16
+    number_of_vehicles = 4
     iterations = 10
     iteration_duration_in_seconds = 120
     vehicle_model_names = [
