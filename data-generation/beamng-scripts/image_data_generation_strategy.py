@@ -9,8 +9,9 @@ from beamngpy.sensors import Camera
 from data_generation_strategy import DataGenerationStrategy
 
 class ImageDataGenerationStrategy(DataGenerationStrategy):
-    
+
     def __init__(self, bng: BeamNGpy, number_of_vehicles_in_traffic: int):
+        super().__init__()
         self.bng = bng
         self.number_of_vehicles_in_traffic = number_of_vehicles_in_traffic
         self.traffic = bng.traffic
@@ -36,8 +37,8 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
             vehicle.ai.set_aggression(0.5)
             front_camera_pos = (0.0, -4, 0.8)
             front_camera_dir = (0, -1, 0)
-            camera = Camera(vehicle.vid + '_front_camera', self.bng, vehicle=vehicle,
-                requested_update_time=-1.0, is_using_shared_memory=True,
+            camera = Camera(vehicle.vid + '_camera', self.bng, vehicle=vehicle,
+                requested_update_time=1.0, is_using_shared_memory=True, update_priority=1,
                 pos=front_camera_pos, dir=front_camera_dir, field_of_view_y=90,
                 near_far_planes=(0.1, 100), resolution=(1024, 1024),
                 is_render_annotations=True, is_render_instance=True, is_render_depth=True
@@ -56,6 +57,7 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         self.traffic.reset()
     
     def _snap_camera(self, camera: Camera, class_data: dict):
+        print('Snapping camera')
         images = camera.get_full_poll_request()
         self.images.append(images['colour'])
         bounding_boxes = Camera.extract_bounding_boxes(images['annotation'], images['instance'], class_data)
@@ -84,17 +86,17 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         camera_directions = [front_camera_dir, rear_camera_dir, right_camera_dir, left_camera_dir]
         
         time.sleep(1)
-        t0 = time.time()
-        while t0 + iteration_duration > time.time():
-            for vehicle, camera in self.vehicle_cameras.items():
-                print(vehicle)
-                print(camera)
+        old_number_of_images = len(self.images)
+        while iteration_duration > len(self.images) - old_number_of_images: # Loop until the number of images taken is equal to the number of seconds in the iteration
+            for camera in self.vehicle_cameras.values():
                 for (camera_pos, camera_dir) in zip(camera_positions, camera_directions):
                     camera.set_position(camera_pos)
                     camera.set_direction(camera_dir)
                     self._snap_camera(camera, class_data)
 
         # self._show_most_recent_image()
+        new_number_of_images = len(self.images)
+        print(f'Number of images taken during iteration {iteration}: {new_number_of_images - old_number_of_images}')
 
     def clean_scenario(self, scenario: Scenario) -> None:
         for camera in self.cameras:
