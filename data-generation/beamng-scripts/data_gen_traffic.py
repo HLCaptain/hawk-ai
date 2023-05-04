@@ -43,8 +43,8 @@ def generate_data(
 def main():
     set_up_simple_logging()
 
-    number_of_vehicles = 2
-    number_of_iterations = 4
+    number_of_vehicles_in_traffic = 10
+    number_of_iterations = 2
     iteration_duration_in_seconds = 45
     
     random.seed(1337 + time.time_ns())
@@ -54,7 +54,7 @@ def main():
 
     scenario = Scenario('west_coast_usa', 'data_generation', description='Generating data iteratively')
     
-    data_generation_strategy = ImageDataGenerationStrategy(bng, number_of_vehicles)
+    data_generation_strategy = ImageDataGenerationStrategy(bng, number_of_vehicles_in_traffic)
 
     generate_data(
         bng=bng,
