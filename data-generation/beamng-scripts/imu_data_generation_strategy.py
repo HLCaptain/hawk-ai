@@ -79,14 +79,14 @@ class ImuDataGenerationStrategy(DataGenerationStrategy):
             scenario.remove_vehicle(vehicle)
         self.traffic.reset()
 
-    def monitor_data(self, iteration_duration: float, iteration: int) -> None:
+    def monitor_data(self, monitor_data_length: int, iteration: int) -> None:
         print('Driving around, polling the advanced IMU sensor at regular intervals...')
         counter = 0
         imu_ids = {}
         for imu in self.imus:
             imu_ids[imu.name] = iteration * self.number_of_vehicles + counter
         rows = []
-        while len(rows) < self.number_of_vehicles / self.imu_update_time * iteration_duration:
+        while len(rows) < self.number_of_vehicles / self.imu_update_time * monitor_data_length:
             for imu in self.imus:
                 imu_data = imu.poll()  # Fetch the latest readings from the sensor.
                 for item in imu_data:

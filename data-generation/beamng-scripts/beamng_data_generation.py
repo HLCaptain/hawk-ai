@@ -11,7 +11,7 @@ def generate_data(
     scenario: Scenario,
     data_generation_strategy: DataGenerationStrategy,
     number_of_iterations: int,
-    iteration_duration_in_seconds: int):
+    monitor_data_length: int):
 
     vehicle_main_name = 'vehicle_main'
     vehicle_main = Vehicle(
@@ -32,7 +32,7 @@ def generate_data(
         data_generation_strategy.setup_scenario(scenario)
         
         print('Monitoring data for iteration', iteration)
-        data_generation_strategy.monitor_data(iteration_duration_in_seconds, iteration)
+        data_generation_strategy.monitor_data(monitor_data_length, iteration)
         
         print('Scenario cleanup for iteration', iteration)
         data_generation_strategy.clean_scenario(scenario)
@@ -44,8 +44,8 @@ def main():
     set_up_simple_logging()
 
     number_of_vehicles_in_traffic = 12
-    number_of_iterations = 12
-    iteration_duration_in_seconds = 90
+    number_of_iterations = 32
+    image_per_iteration = 20
     
     random.seed(1337 + time.time_ns())
     beamng = BeamNGpy('localhost', 64256)
@@ -61,7 +61,7 @@ def main():
         scenario=scenario,
         data_generation_strategy=data_generation_strategy,
         number_of_iterations=number_of_iterations,
-        iteration_duration_in_seconds=iteration_duration_in_seconds,
+        monitor_data_length=image_per_iteration,
     )
     
     bng.close()

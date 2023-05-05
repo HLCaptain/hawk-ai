@@ -44,7 +44,7 @@ class DataGenerationStrategy(ABC):
         pass
 
     @abstractmethod
-    def monitor_data(self, iteration_duration: float, iteration: int) -> None:
+    def monitor_data(self, monitor_data_length: int, iteration: int) -> None:
         pass
     
     @abstractmethod

@@ -1,19 +1,19 @@
 import time
-import pandas as pd
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from lxml import etree
 from beamngpy import Scenario, BeamNGpy, Vehicle
 from beamngpy.sensors import Camera
 from data_generation_strategy import DataGenerationStrategy
+from PIL import Image
 
 class ImageDataGenerationStrategy(DataGenerationStrategy):
 
-    def __init__(self, bng: BeamNGpy, number_of_vehicles_in_traffic: int):
+    def __init__(self, bng: BeamNGpy, number_of_vehicles_in_traffic: int, image_resolution: tuple[int, int] = (1024, 1024)):
         super().__init__()
         self.bng = bng
         self.number_of_vehicles_in_traffic = number_of_vehicles_in_traffic
+        self.image_resolution = image_resolution
         self.traffic = bng.traffic
         self.cameras: list[Camera] = []
         self.bboxes = []
@@ -38,9 +38,9 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
             front_camera_pos = (0.0, -4, 0.8)
             front_camera_dir = (0, -1, 0)
             camera = Camera(vehicle.vid + '_camera', self.bng, vehicle=vehicle,
-                requested_update_time=1.0, is_using_shared_memory=True, update_priority=1,
+                requested_update_time=-1.0, is_using_shared_memory=True, update_priority=1,
                 pos=front_camera_pos, dir=front_camera_dir, field_of_view_y=90,
-                near_far_planes=(0.1, 100), resolution=(1024, 1024),
+                near_far_planes=(0.1, 100), resolution=self.image_resolution,
                 is_render_annotations=True, is_render_instance=True, is_render_depth=True
             )
             self.cameras.append(camera)
@@ -59,6 +59,7 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
     def _snap_camera(self, camera: Camera, class_data: dict):
         print('Snapping camera')
         images = camera.get_full_poll_request()
+
         self.images.append(images['colour'])
         bounding_boxes = Camera.extract_bounding_boxes(images['annotation'], images['instance'], class_data)
         self.bboxes.append(bounding_boxes)
@@ -70,7 +71,7 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         plt.imshow(np.asarray(image_with_boxes.convert('RGB')))
         plt.show()
     
-    def monitor_data(self, iteration_duration: float, iteration: int) -> None:
+    def monitor_data(self, monitor_data_length: int, iteration: int) -> None:
         annotations = self.bng.camera.get_annotations()                     # Gets a dictionary of RGB colours, indexed by material names.
         class_data = self.bng.camera.get_annotation_classes(annotations)    # Gets a dictionary of material names, indexed by RGB colours (encoded as 32-bit).
 
@@ -87,7 +88,8 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         
         time.sleep(1)
         old_number_of_images = len(self.images)
-        while iteration_duration > len(self.images) - old_number_of_images: # Loop until the number of images taken is equal to the number of seconds in the iteration
+        t0 = time.time()
+        while monitor_data_length > len(self.images) - old_number_of_images: # Loop until the number of images taken is equal to the number of seconds in the iteration
             for camera in self.vehicle_cameras.values():
                 for (camera_pos, camera_dir) in zip(camera_positions, camera_directions):
                     camera.set_position(camera_pos)
@@ -123,12 +125,20 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
 
         for i, (image_data, bboxes) in enumerate(zip(self.images, self.bboxes)):
             # Save image
-            image_filename = f"image_{i:04d}.png"
-            plt.imsave(os.path.join(image_folder, image_filename), np.asarray(image_data.convert('RGB')))
+            image_filename = f"image_{i:04d}.webp"
+            image_data = image_data.convert('RGB')
+            image_data.save(os.path.join(image_folder, image_filename), format='WebP', lossless=False, method=6, quality=80)
+
             # Create XML annotations
-            annotation_xml = Camera.export_bounding_boxes_xml(bboxes, filename=image_filename, size=(1024, 1024, 3))
+            annotation_xml = Camera.export_bounding_boxes_xml(bboxes, filename=image_filename, size=(*self.image_resolution, 3))
 
             # Save XML annotation
             annotation_filename = f"annotation_{i:04d}.xml"
             with open(file=os.path.join(annotations_folder, annotation_filename), mode='w', encoding='utf-8') as file:
                 file.write(annotation_xml)
+                
+            # Print progress
+            if i % 25 == 0:
+                print(f'Finished saving {i}/{len(self.images)} images')
+                
+        print(f'Finished saving {len(self.images)} images')
