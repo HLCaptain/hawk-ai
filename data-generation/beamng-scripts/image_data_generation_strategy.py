@@ -2,6 +2,7 @@ import time
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import threading
 from beamngpy import Scenario, BeamNGpy, Vehicle
 from beamngpy.sensors import Camera
 from data_generation_strategy import DataGenerationStrategy
@@ -88,7 +89,6 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         
         time.sleep(1)
         old_number_of_images = len(self.images)
-        t0 = time.time()
         while monitor_data_length > len(self.images) - old_number_of_images: # Loop until the number of images taken is equal to the number of seconds in the iteration
             for camera in self.vehicle_cameras.values():
                 for (camera_pos, camera_dir) in zip(camera_positions, camera_directions):
@@ -99,6 +99,10 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         # self._show_most_recent_image()
         new_number_of_images = len(self.images)
         print(f'Number of images taken during iteration {iteration}: {new_number_of_images - old_number_of_images}')
+        
+        # Save images and annotations in a separate thread
+        save_thread = threading.Thread(target=self.save_images_and_annotations, args=(old_number_of_images, new_number_of_images))
+        save_thread.start()
 
     def clean_scenario(self, scenario: Scenario) -> None:
         for camera in self.cameras:
@@ -110,35 +114,36 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         self.vehicle_cameras.clear()
     
     def finish(self) -> None:
-        # Save images and annotations
-        image_folder = 'images'
-        annotations_folder = 'annotations'
-        # Remove folders if they exist
-        if os.path.exists(image_folder):
-            for filename in os.listdir(image_folder):
-                os.remove(os.path.join(image_folder, filename))
-        if os.path.exists(annotations_folder):
-            for filename in os.listdir(annotations_folder):
-                os.remove(os.path.join(annotations_folder, filename))
-        os.makedirs(image_folder, exist_ok=True)
-        os.makedirs(annotations_folder, exist_ok=True)
+        pass
+        
+    def save_images_and_annotations(self, start_index: int, end_index: int) -> None:
+        for i, (image_data, bboxes) in enumerate(zip(self.images[start_index:end_index], self.bboxes[start_index:end_index])):
+            image_folder = 'images'
+            annotations_folder = 'annotations'
+            os.makedirs(image_folder, exist_ok=True)
+            os.makedirs(annotations_folder, exist_ok=True)
 
-        for i, (image_data, bboxes) in enumerate(zip(self.images, self.bboxes)):
-            # Save image
-            image_filename = f"image_{i:04d}.webp"
+            # Save image, overwriting previous images
+            image_filename = f"image_{i + start_index:04d}.webp"
+            image_filepath = os.path.join(image_folder, image_filename)
+            if os.path.exists(image_filepath):
+                os.remove(image_filepath)
             image_data = image_data.convert('RGB')
-            image_data.save(os.path.join(image_folder, image_filename), format='WebP', lossless=False, method=6, quality=80)
+            image_data.save(fp=image_filepath, format='WebP', lossless=False, method=6, quality=80)
 
             # Create XML annotations
             annotation_xml = Camera.export_bounding_boxes_xml(bboxes, filename=image_filename, size=(*self.image_resolution, 3))
 
-            # Save XML annotation
-            annotation_filename = f"annotation_{i:04d}.xml"
-            with open(file=os.path.join(annotations_folder, annotation_filename), mode='w', encoding='utf-8') as file:
+            # Save XML annotation, overwriting previous images
+            annotation_filename = f"annotation_{i + start_index:04d}.xml"
+            annotation_filepath = os.path.join(annotations_folder, annotation_filename)
+            if os.path.exists(annotation_filepath):
+                os.remove(annotation_filepath)
+            with open(file=annotation_filepath, mode='w', encoding='utf-8') as file:
                 file.write(annotation_xml)
-                
+
             # Print progress
             if i % 25 == 0:
-                print(f'Finished saving {i}/{len(self.images)} images')
-                
-        print(f'Finished saving {len(self.images)} images')
+                print(f'Finished saving {i + 1 + start_index}/{len(self.images)} images')
+            
+        print(f'Finished saving {end_index}/{len(self.images)} images')

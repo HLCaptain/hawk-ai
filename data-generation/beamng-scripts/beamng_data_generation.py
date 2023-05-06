@@ -9,7 +9,7 @@ from image_data_generation_strategy import ImageDataGenerationStrategy
 def generate_data(
     bng: BeamNGpy,
     scenario: Scenario,
-    data_generation_strategy: DataGenerationStrategy,
+    strategy: DataGenerationStrategy,
     number_of_iterations: int,
     monitor_data_length: int):
 
@@ -29,23 +29,29 @@ def generate_data(
 
     for iteration in range(number_of_iterations):
         print('Setting up scenario for iteration', iteration)
-        data_generation_strategy.setup_scenario(scenario)
+        strategy.setup_scenario(scenario)
         
         print('Monitoring data for iteration', iteration)
-        data_generation_strategy.monitor_data(monitor_data_length, iteration)
+        strategy.monitor_data(monitor_data_length, iteration)
         
         print('Scenario cleanup for iteration', iteration)
-        data_generation_strategy.clean_scenario(scenario)
+        strategy.clean_scenario(scenario)
 
     print('Ended data generation for iteration', iteration)
-    data_generation_strategy.finish()
+    strategy.finish()
 
 def main():
     set_up_simple_logging()
 
+    number_of_iterations = 200
+    
+    # Image generation
     number_of_vehicles_in_traffic = 12
-    number_of_iterations = 32
     image_per_iteration = 20
+    
+    # IMU generation
+    number_of_vehicles = 2
+    iteration_duration_in_seconds = 45
     
     random.seed(1337 + time.time_ns())
     beamng = BeamNGpy('localhost', 64256)
@@ -54,12 +60,13 @@ def main():
 
     scenario = Scenario('west_coast_usa', 'data_generation', description='Generating data iteratively')
     
-    data_generation_strategy = ImageDataGenerationStrategy(bng, number_of_vehicles_in_traffic)
+    image_generation_strategy = ImageDataGenerationStrategy(bng, number_of_vehicles_in_traffic)
+    imu_generation_strategy = ImuDataGenerationStrategy(bng, number_of_vehicles)
 
     generate_data(
         bng=bng,
         scenario=scenario,
-        data_generation_strategy=data_generation_strategy,
+        strategy=image_generation_strategy,
         number_of_iterations=number_of_iterations,
         monitor_data_length=image_per_iteration,
     )
