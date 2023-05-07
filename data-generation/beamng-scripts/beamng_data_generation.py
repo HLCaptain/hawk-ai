@@ -12,7 +12,7 @@ def generate_data(
     get_scenario: Callable[[], Scenario],
     strategy: DataGenerationStrategy,
     number_of_iterations: int,
-    number_of_restarts: int,
+    number_of_simulations: int,
     monitor_data_length: int):
 
     vehicle_main_name = 'vehicle_main'
@@ -23,8 +23,8 @@ def generate_data(
         color='Red'
     )
     
-    for restart in range(number_of_restarts + 1):
-        print('Starting simulation:', restart)
+    for simulation in range(number_of_simulations):
+        print('Starting simulation:', simulation)
         bng = beamng.open(launch=True)
         bng.settings.set_deterministic(100) # Set simulator to 60hz temporal resolution
         scenario = get_scenario()
@@ -47,19 +47,20 @@ def generate_data(
             print('Ended data generation for iteration', iteration)
             strategy.finish()
 
-        print('Closing simulation:', restart)
+        print('Closing simulation:', simulation)
         bng.close()
         time.sleep(5)
 
 def main():
     set_up_simple_logging()
 
-    number_of_restarts = 4
-    number_of_iterations = 64
+    number_of_simulations = 4
+    number_of_iterations = 50
     
     # Image generation
     number_of_vehicles_in_traffic = 12
     image_per_iteration = 20
+    # 4 simulation * 50 iterations * 20 images = 4000 images generated overall
     
     # IMU generation
     number_of_vehicles = 2
@@ -78,7 +79,7 @@ def main():
         get_scenario=get_scenario,
         strategy=image_generation_strategy,
         number_of_iterations=number_of_iterations,
-        number_of_restarts=number_of_restarts,
+        number_of_simulations=number_of_simulations,
         monitor_data_length=image_per_iteration,
     )
 
