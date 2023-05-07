@@ -17,8 +17,9 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         self.image_resolution = image_resolution
         self.traffic = bng.traffic
         self.cameras: list[Camera] = []
-        self.bboxes = []
-        self.images = []
+        self.bbox_cache = []
+        self.image_cache = []
+        self.images_saved = 0
         self.vehicle_cameras: dict[Vehicle, Camera] = {}
     
     def setup_scenario(self, scenario: Scenario) -> None:
@@ -61,12 +62,12 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         print('Snapping camera')
         images = camera.get_full_poll_request()
 
-        self.images.append(images['colour'])
+        self.image_cache.append(images['colour'])
         bounding_boxes = Camera.extract_bounding_boxes(images['annotation'], images['instance'], class_data)
-        self.bboxes.append(bounding_boxes)
+        self.bbox_cache.append(bounding_boxes)
         
     def _show_most_recent_image(self):
-        image_with_boxes = Camera.draw_bounding_boxes(self.bboxes[-1], self.images[-1], width=3)
+        image_with_boxes = Camera.draw_bounding_boxes(self.bbox_cache[-1], self.image_cache[-1], width=3)
         plt.clf()
         plt.figure(figsize=(15, 15))
         plt.imshow(np.asarray(image_with_boxes.convert('RGB')))
@@ -88,8 +89,8 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         camera_directions = [front_camera_dir, rear_camera_dir, right_camera_dir, left_camera_dir]
         
         time.sleep(1)
-        old_number_of_images = len(self.images)
-        while monitor_data_length > len(self.images) - old_number_of_images: # Loop until the number of images taken is equal to the number of seconds in the iteration
+        old_number_of_images = len(self.image_cache)
+        while monitor_data_length > len(self.image_cache) - old_number_of_images: # Loop until the number of images taken is equal to the number of seconds in the iteration
             for camera in self.vehicle_cameras.values():
                 for (camera_pos, camera_dir) in zip(camera_positions, camera_directions):
                     camera.set_position(camera_pos)
@@ -97,11 +98,11 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
                     self._snap_camera(camera, class_data)
 
         # self._show_most_recent_image()
-        new_number_of_images = len(self.images)
+        new_number_of_images = len(self.image_cache)
         print(f'Number of images taken during iteration {iteration}: {new_number_of_images - old_number_of_images}')
         
         # Save images and annotations in a separate thread
-        save_thread = threading.Thread(target=self.save_images_and_annotations, args=(old_number_of_images, new_number_of_images))
+        save_thread = threading.Thread(target=self.save_images_and_annotations)
         save_thread.start()
 
     def clean_scenario(self, scenario: Scenario) -> None:
@@ -116,15 +117,15 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
     def finish(self) -> None:
         pass
         
-    def save_images_and_annotations(self, start_index: int, end_index: int) -> None:
-        for i, (image_data, bboxes) in enumerate(zip(self.images[start_index:end_index], self.bboxes[start_index:end_index])):
+    def save_images_and_annotations(self) -> None:
+        for i, (image_data, bboxes) in enumerate(zip(self.image_cache, self.bbox_cache)):
             image_folder = 'images'
             annotations_folder = 'annotations'
             os.makedirs(image_folder, exist_ok=True)
             os.makedirs(annotations_folder, exist_ok=True)
 
             # Save image, overwriting previous images
-            image_filename = f"image_{i + start_index:04d}.webp"
+            image_filename = f"image_{self.images_saved:04d}.webp"
             image_filepath = os.path.join(image_folder, image_filename)
             if os.path.exists(image_filepath):
                 os.remove(image_filepath)
@@ -135,15 +136,19 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
             annotation_xml = Camera.export_bounding_boxes_xml(bboxes, filename=image_filename, size=(*self.image_resolution, 3))
 
             # Save XML annotation, overwriting previous images
-            annotation_filename = f"annotation_{i + start_index:04d}.xml"
+            annotation_filename = f"annotation_{self.images_saved:04d}.xml"
             annotation_filepath = os.path.join(annotations_folder, annotation_filename)
             if os.path.exists(annotation_filepath):
                 os.remove(annotation_filepath)
             with open(file=annotation_filepath, mode='w', encoding='utf-8') as file:
                 file.write(annotation_xml)
 
+            self.images_saved += 1
+
             # Print progress
-            if i % 25 == 0:
-                print(f'Finished saving {i + 1 + start_index}/{len(self.images)} images')
+            if i % 25 == 0 and i != 0:
+                print(f'Finished saving {self.images_saved}/{len(self.image_cache) + self.images_saved - i - 1} images')
             
-        print(f'Finished saving {end_index}/{len(self.images)} images')
+        print(f'Finished saving {self.images_saved}/{self.images_saved} images')
+        self.image_cache.clear()
+        self.bbox_cache.clear()
