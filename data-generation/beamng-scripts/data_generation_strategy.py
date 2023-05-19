@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from beamngpy import Scenario, BeamNGpy, Vehicle
 
 class DataGenerationStrategy(ABC):
-    
+
     def __init__(self):
         self.vehicle_model_names = [
             'autobello',
@@ -34,11 +34,11 @@ class DataGenerationStrategy(ABC):
             'midsize',
             'wendover'
         ]
-    
+
     @abstractmethod
     def setup_scenario(self, scenario: Scenario) -> None:
         pass
-    
+
     @abstractmethod
     def clean_scenario(self, scenario: Scenario) -> None:
         pass
@@ -46,18 +46,18 @@ class DataGenerationStrategy(ABC):
     @abstractmethod
     def monitor_data(self, monitor_data_length: int, iteration: int) -> None:
         pass
-    
+
     @abstractmethod
-    def finish(self) -> None:
+    def finish_iteration(self) -> None:
         pass
-    
+
     def spawn_random_vehicles(
         self,
         bng: BeamNGpy,
         scenario: Scenario,
         number_of_vehicles: int = 1,
         models: list[str] = []):
-        
+
         if len(models) == 0:
             models = self.vehicle_model_names
 
@@ -68,18 +68,18 @@ class DataGenerationStrategy(ABC):
             roads = bng.scenario.get_roads()
             are_roads_loading = len(roads) == 0
         print('Road data loaded!')
-        
+
         drivable_road_ids = []
         for r_id, r_inf in roads.items():
             if r_inf['drivability'] != '-1':
                 drivable_road_ids.append(r_id)
 
         drivable_road_ids = random.choices(drivable_road_ids, k=number_of_vehicles)
-        
+
         road_edges = {}
         for road_id in drivable_road_ids:
             road_edges[road_id] = bng.scenario.get_road_edges(road_id)
-        
+
         for r_id, r_edges in road_edges.items():
             vehicle_name = 'vehicle_' + r_id
             vehicle = Vehicle(

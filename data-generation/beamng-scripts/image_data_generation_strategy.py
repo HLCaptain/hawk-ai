@@ -21,18 +21,17 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         self.image_cache = []
         self.images_saved = 0
         self.vehicle_cameras: dict[Vehicle, Camera] = {}
-    
-    def setup_scenario(self, scenario: Scenario) -> None:
 
+    def setup_scenario(self, scenario: Scenario) -> None:
         self.spawn_random_vehicles(
             bng=self.bng,
             scenario=scenario,
             number_of_vehicles=1,
             models=['etk800']
         )
-        
+
         list(scenario.vehicles.values())[0].switch()
-        
+
         for vehicle in scenario.vehicles.values():
             vehicle.ai.set_mode('traffic')
             vehicle.ai.drive_in_lane(True)
@@ -47,7 +46,7 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
             )
             self.cameras.append(camera)
             self.vehicle_cameras[vehicle] = camera
-            
+
         scenario.update()
 
         self.traffic.start(list(scenario.vehicles.values()))
@@ -57,7 +56,7 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
             parked_amount=0
         )
         self.traffic.reset()
-    
+
     def _snap_camera(self, camera: Camera, class_data: dict):
         print('Snapping camera')
         images = camera.get_full_poll_request()
@@ -65,14 +64,14 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         self.image_cache.append(images['colour'])
         bounding_boxes = Camera.extract_bounding_boxes(images['annotation'], images['instance'], class_data)
         self.bbox_cache.append(bounding_boxes)
-        
+
     def _show_most_recent_image(self):
         image_with_boxes = Camera.draw_bounding_boxes(self.bbox_cache[-1], self.image_cache[-1], width=3)
         plt.clf()
         plt.figure(figsize=(15, 15))
         plt.imshow(np.asarray(image_with_boxes.convert('RGB')))
         plt.show()
-    
+
     def monitor_data(self, monitor_data_length: int, iteration: int) -> None:
         annotations = self.bng.camera.get_annotations()                     # Gets a dictionary of RGB colours, indexed by material names.
         class_data = self.bng.camera.get_annotation_classes(annotations)    # Gets a dictionary of material names, indexed by RGB colours (encoded as 32-bit).
@@ -87,7 +86,7 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         left_camera_dir = (1, 0, 0)
         camera_positions = [front_camera_pos, rear_camera_pos, right_camera_pos, left_camera_pos]
         camera_directions = [front_camera_dir, rear_camera_dir, right_camera_dir, left_camera_dir]
-        
+
         time.sleep(1)
         old_number_of_images = len(self.image_cache)
         while monitor_data_length > len(self.image_cache) - old_number_of_images: # Loop until the number of images taken is equal to the number of seconds in the iteration
@@ -100,10 +99,6 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         # self._show_most_recent_image()
         new_number_of_images = len(self.image_cache)
         print(f'Number of images taken during iteration {iteration}: {new_number_of_images - old_number_of_images}')
-        
-        # Save images and annotations in a separate thread
-        save_thread = threading.Thread(target=self.save_images_and_annotations)
-        save_thread.start()
 
     def clean_scenario(self, scenario: Scenario) -> None:
         for camera in self.cameras:
@@ -113,10 +108,12 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
             scenario.remove_vehicle(vehicle)
         self.traffic.reset()
         self.vehicle_cameras.clear()
-    
-    def finish(self) -> None:
-        pass
-        
+
+    def finish_iteration(self) -> None:
+        # Save images and annotations in a separate thread
+        save_thread = threading.Thread(target=self.save_images_and_annotations)
+        save_thread.start()
+
     def save_images_and_annotations(self) -> None:
         for i, (image_data, bboxes) in enumerate(zip(self.image_cache, self.bbox_cache)):
             image_folder = 'images'
@@ -148,7 +145,7 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
             # Print progress
             if i % 25 == 0 and i != 0:
                 print(f'Finished saving {self.images_saved}/{len(self.image_cache) + self.images_saved - i - 1} images')
-            
+
         print(f'Finished saving {self.images_saved}/{self.images_saved} images')
         self.image_cache.clear()
         self.bbox_cache.clear()

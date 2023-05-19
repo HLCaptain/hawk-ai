@@ -6,7 +6,7 @@ from data_generation_strategy import DataGenerationStrategy
 from imu_data_generation_strategy import ImuDataGenerationStrategy
 from image_data_generation_strategy import ImageDataGenerationStrategy
 from typing import Callable
-    
+
 def generate_data(
     beamng: BeamNGpy,
     get_scenario: Callable[[], Scenario],
@@ -22,7 +22,7 @@ def generate_data(
         license='HawkAI',
         color='Red'
     )
-    
+
     for simulation in range(number_of_simulations):
         print('Starting simulation:', simulation)
         bng = beamng.open(launch=True)
@@ -33,7 +33,7 @@ def generate_data(
         bng.load_scenario(scenario)
         scenario.remove_vehicle(vehicle_main)
         bng.start_scenario()
-        
+
         for iteration in range(number_of_iterations):
             print('Setting up scenario for iteration', iteration)
             strategy.setup_scenario(scenario)
@@ -45,7 +45,7 @@ def generate_data(
             strategy.clean_scenario(scenario)
 
             print('Ended data generation for iteration', iteration)
-            strategy.finish()
+            strategy.finish_iteration()
 
         print('Closing simulation:', simulation)
         bng.close()
@@ -56,31 +56,31 @@ def main():
 
     number_of_simulations = 4
     number_of_iterations = 50
-    
+
     # Image generation
     number_of_vehicles_in_traffic = 12
     image_per_iteration = 20
-    # 4 simulation * 50 iterations * 20 images = 4000 images generated overall
-    
+    # 4 simulations * 50 iterations * 20 images = 4000 images generated overall
+
     # IMU generation
     number_of_vehicles = 2
-    iteration_duration_in_seconds = 45
+    iteration_duration_in_seconds = 60
 
     get_scenario = lambda: Scenario('west_coast_usa', 'data_generation', description='Generating data iteratively')
-    
+
     random.seed(1337 + time.time_ns())
     beamng = BeamNGpy('localhost', 64256)
-    
+
     image_generation_strategy = ImageDataGenerationStrategy(beamng, number_of_vehicles_in_traffic)
     imu_generation_strategy = ImuDataGenerationStrategy(beamng, number_of_vehicles)
 
     generate_data(
         beamng=beamng,
         get_scenario=get_scenario,
-        strategy=image_generation_strategy,
+        strategy=imu_generation_strategy,
         number_of_iterations=number_of_iterations,
         number_of_simulations=number_of_simulations,
-        monitor_data_length=image_per_iteration,
+        monitor_data_length=iteration_duration_in_seconds,
     )
 
 if __name__ == '__main__':
