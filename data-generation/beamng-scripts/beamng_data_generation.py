@@ -35,16 +35,16 @@ def generate_data(
         bng.start_scenario()
 
         for iteration in range(number_of_iterations):
-            print('Setting up scenario for iteration', iteration)
+            print('Setting up scenario for iteration', iteration * simulation + iteration)
             strategy.setup_scenario(scenario)
 
-            print('Monitoring data for iteration', iteration)
-            strategy.monitor_data(monitor_data_length, iteration)
+            print('Monitoring data for iteration', iteration * simulation)
+            strategy.monitor_data(monitor_data_length, iteration * simulation + iteration)
 
-            print('Scenario cleanup for iteration', iteration)
+            print('Scenario cleanup for iteration', iteration * simulation + iteration)
             strategy.clean_scenario(scenario)
 
-            print('Ended data generation for iteration', iteration)
+            print('Ended data generation for iteration', iteration * simulation + iteration)
             strategy.finish_iteration()
 
         print('Closing simulation:', simulation)
