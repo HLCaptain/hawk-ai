@@ -20,7 +20,8 @@ class ImuDataGenerationStrategy(DataGenerationStrategy):
         self.imu_ids = {}
         self.imu_update_time = 0.01
         self.data = self._get_default_data_frame()
-        self.data_file_name = 'imu_data_' + datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + '.parquet'
+        os.makedirs('data/imu', exist_ok=True)
+        self.data_file_name = 'data/imu/imu_data_' + datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + '.parquet'
 
     def _get_default_data_frame(self) -> pd.DataFrame:
         return pd.DataFrame(columns=[

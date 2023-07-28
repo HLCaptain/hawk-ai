@@ -116,8 +116,8 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
 
     def save_images_and_annotations(self) -> None:
         for i, (image_data, bboxes) in enumerate(zip(self.image_cache, self.bbox_cache)):
-            image_folder = 'images'
-            annotations_folder = 'annotations'
+            image_folder = 'data/images'
+            annotations_folder = 'data/annotations'
             os.makedirs(image_folder, exist_ok=True)
             os.makedirs(annotations_folder, exist_ok=True)
 
