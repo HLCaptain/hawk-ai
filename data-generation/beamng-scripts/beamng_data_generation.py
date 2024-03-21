@@ -5,6 +5,7 @@ from beamngpy import BeamNGpy, Scenario, Vehicle, set_up_simple_logging
 from data_generation_strategy import DataGenerationStrategy
 from imu_data_generation_strategy import ImuDataGenerationStrategy
 from image_data_generation_strategy import ImageDataGenerationStrategy
+from image_in_x_data_generation_strategy import ImageInXDataGenerationStrategy
 from typing import Callable
 
 def generate_data(
@@ -54,8 +55,8 @@ def generate_data(
 def main():
     set_up_simple_logging()
 
-    number_of_simulations = 4
-    number_of_iterations = 50
+    number_of_simulations = 2
+    number_of_iterations = 20
 
     # Image generation
     number_of_vehicles_in_traffic = 12
@@ -71,7 +72,7 @@ def main():
     random.seed(1337 + time.time_ns())
     beamng = BeamNGpy('localhost', 64256)
 
-    image_generation_strategy = ImageDataGenerationStrategy(beamng, number_of_vehicles_in_traffic)
+    image_generation_strategy = ImageInXDataGenerationStrategy(beamng, number_of_vehicles_in_traffic)
     imu_generation_strategy = ImuDataGenerationStrategy(beamng, number_of_vehicles)
 
     generate_data(
