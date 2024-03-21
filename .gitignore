@@ -1,1 +1,10 @@
-data
+# Data and input files
+/data/**
+!/data/.gitkeep
+
+# Output and model files
+/models/saved_models/**
+/models/outputs/**
+/models/**.csv
+/models/**.pkl
+/models/**.tflite
