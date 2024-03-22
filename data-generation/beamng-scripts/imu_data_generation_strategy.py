@@ -9,6 +9,19 @@ from beamngpy import Scenario, Vehicle, BeamNGpy
 from beamngpy.sensors import AdvancedIMU
 
 class ImuDataGenerationStrategy(DataGenerationStrategy):
+    """
+    A class representing a strategy for generating IMU data.
+
+    Attributes:
+        bng (BeamNGpy): The BeamNGpy instance.
+        number_of_vehicles (int): The number of vehicles in the scenario.
+        imus (list[AdvancedIMU]): A list of AdvancedIMU instances.
+        aggressions (dict): A dictionary mapping vehicle IDs to aggression values.
+        imu_ids (dict): A dictionary mapping IMU names to IMU IDs.
+        imu_update_time (float): The time interval for updating the IMU sensor.
+        data (pd.DataFrame): The data frame for storing IMU data.
+        data_file_name (str): The file name for storing the IMU data in Parquet format.
+    """
 
     def __init__(self, bng: BeamNGpy, number_of_vehicles: int):
         super().__init__()
@@ -24,6 +37,12 @@ class ImuDataGenerationStrategy(DataGenerationStrategy):
         self.data_file_name = 'data/imu/imu_data_' + datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + '.parquet'
 
     def _get_default_data_frame(self) -> pd.DataFrame:
+        """
+        Get the default data frame for storing IMU data.
+
+        Returns:
+            pd.DataFrame: The default data frame.
+        """
         return pd.DataFrame(columns=[
             'imuId',
             'vehicleAggression',
@@ -40,10 +59,17 @@ class ImuDataGenerationStrategy(DataGenerationStrategy):
             ])
 
     def setup_vehicle(self, vehicle: Vehicle, aggression: float, mode: str = 'traffic'):
+        """
+        Set up the vehicle for data generation.
+
+        Args:
+            vehicle (Vehicle): The vehicle to set up.
+            aggression (float): The aggression level of the vehicle.
+            mode (str, optional): The mode of the vehicle. Defaults to 'traffic'.
+        """
         vehicle.ai.set_mode(mode)
         vehicle.ai.set_aggression(aggression)
         vehicle.ai.drive_in_lane(True)
-        # vehicle.ai.set_speed(speed = 36.0, mode = 'limit')
 
     def setup_scenario(self, scenario: Scenario) -> None:
         self.spawn_random_vehicles(
@@ -77,8 +103,6 @@ class ImuDataGenerationStrategy(DataGenerationStrategy):
         )
 
     def clean_scenario(self, scenario: Scenario) -> None:
-        # for imu in self.imus:
-        #     imu.remove()
         self.imus.clear()
         for vehicle in list(scenario.vehicles.values()):
             scenario.remove_vehicle(vehicle)

@@ -11,6 +11,15 @@ from data_generation_strategy import DataGenerationStrategy
 from PIL import Image
 
 class ImageInXDataGenerationStrategy(DataGenerationStrategy):
+    """
+    A data generation strategy that captures images from multiple cameras placed on vehicles in a BeamNG.drive scenario.
+    The captured images are saved along with their annotations and natureness values.
+
+    Args:
+        bng (BeamNGpy): The BeamNGpy instance used to interact with the BeamNG.drive simulator.
+        number_of_vehicles_in_traffic (int): The number of vehicles to spawn in traffic.
+        image_resolution (tuple[int, int], optional): The resolution of the captured images. Defaults to (1024, 1024).
+    """
 
     def __init__(self, bng: BeamNGpy, number_of_vehicles_in_traffic: int, image_resolution: tuple[int, int] = (1024, 1024)):
         super().__init__()
@@ -97,7 +106,7 @@ class ImageInXDataGenerationStrategy(DataGenerationStrategy):
                     total_weight += self.object_type_weights[obj[1]]
 
         # Inverse tan and normalize to 0-1
-        natureness = (math.atan(total_weight) + math.pi / 2) / math.pi
+        natureness = (math.atan(total_weight) + math.pi / 2)
         self.natureness_of_images.append(natureness)
 
 

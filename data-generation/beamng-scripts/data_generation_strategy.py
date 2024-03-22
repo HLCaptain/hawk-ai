@@ -37,27 +37,57 @@ class DataGenerationStrategy(ABC):
 
     @abstractmethod
     def setup_scenario(self, scenario: Scenario) -> None:
-        pass
+        """
+        Set up the scenario for data generation.
+
+        Args:
+            scenario (Scenario): The scenario to set up.
+        """
 
     @abstractmethod
     def clean_scenario(self, scenario: Scenario) -> None:
-        pass
+        """
+        Clean up the scenario after data generation.
+
+        Args:
+            scenario (Scenario): The scenario to clean up.
+        """
 
     @abstractmethod
     def monitor_data(self, monitor_data_length: int, iteration: int) -> None:
-        pass
+        """
+        Monitor data during data generation.
+
+        Args:
+            monitor_data_length (int): The length of data to monitor.
+            iteration (int): The current iteration number.
+        """
 
     @abstractmethod
     def finish_iteration(self) -> None:
-        pass
+        """
+        Finish the current iteration of data generation.
+        """
 
     def spawn_random_vehicles(
         self,
         bng: BeamNGpy,
         scenario: Scenario,
         number_of_vehicles: int = 1,
-        models: list[str] = []):
+        models: list[str] = ['etk800']
+    ):
+        """
+        Spawns random vehicles on drivable roads in the scenario.
 
+        Args:
+            bng (BeamNGpy): The BeamNGpy instance.
+            scenario (Scenario): The scenario to spawn vehicles in.
+            number_of_vehicles (int, optional): The number of vehicles to spawn. Defaults to 1.
+            models (list[str], optional): The list of vehicle models to choose from. Defaults to [].
+
+        Returns:
+            None
+        """
         if len(models) == 0:
             models = self.vehicle_model_names
 

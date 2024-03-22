@@ -9,7 +9,14 @@ from data_generation_strategy import DataGenerationStrategy
 from PIL import Image
 
 class ImageDataGenerationStrategy(DataGenerationStrategy):
+    """
+    A data generation strategy for capturing images and annotations using BeamNGpy and a set of vehicle cameras.
 
+    Args:
+        bng (BeamNGpy): The BeamNGpy instance.
+        number_of_vehicles_in_traffic (int): The number of vehicles in traffic.
+        image_resolution (tuple[int, int], optional): The resolution of the captured images. Defaults to (1024, 1024).
+    """
     def __init__(self, bng: BeamNGpy, number_of_vehicles_in_traffic: int, image_resolution: tuple[int, int] = (1024, 1024)):
         super().__init__()
         self.bng = bng

@@ -15,6 +15,20 @@ def generate_data(
     number_of_iterations: int,
     number_of_simulations: int,
     monitor_data_length: int):
+    """
+    Generates data using the BeamNGpy simulator.
+
+    Args:
+        beamng (BeamNGpy): The BeamNGpy instance used to connect to the simulator.
+        get_scenario (Callable[[], Scenario]): A function that returns a new Scenario object for each simulation.
+        strategy (DataGenerationStrategy): The data generation strategy to use.
+        number_of_iterations (int): The number of iterations to perform for each simulation.
+        number_of_simulations (int): The number of simulations to run.
+        monitor_data_length (int): The length of data to monitor for each iteration.
+
+    Returns:
+        None
+    """
 
     vehicle_main_name = 'vehicle_main'
     vehicle_main = Vehicle(
