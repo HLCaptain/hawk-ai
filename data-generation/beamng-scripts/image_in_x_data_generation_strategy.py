@@ -96,8 +96,8 @@ class ImageInXDataGenerationStrategy(DataGenerationStrategy):
                 if obj[1] in self.object_type_weights:
                     total_weight += self.object_type_weights[obj[1]]
 
-        # Inverse tan
-        natureness = math.atan(total_weight) + math.pi / 2
+        # Inverse tan and normalize to 0-1
+        natureness = (math.atan(total_weight) + math.pi / 2) / math.pi
         self.natureness_of_images.append(natureness)
 
 
