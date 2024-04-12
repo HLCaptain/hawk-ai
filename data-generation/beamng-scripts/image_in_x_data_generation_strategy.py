@@ -9,6 +9,7 @@ from beamngpy.sensors import Camera
 from beamngpy.types import Float3
 from data_generation_strategy import DataGenerationStrategy
 from PIL import Image
+from beamngpy.logging import BNGValueError
 
 class ImageInXDataGenerationStrategy(DataGenerationStrategy):
     """
@@ -33,6 +34,7 @@ class ImageInXDataGenerationStrategy(DataGenerationStrategy):
         self.images_saved = 0
         self.vehicle_cameras: dict[Vehicle, Camera] = {}
         self.natureness_of_images: list[float] = []
+        self.scenario: Scenario
 
         # All object's positions and types on the map
         self.map_objects: list[tuple[Float3, str]] = []
@@ -47,16 +49,13 @@ class ImageInXDataGenerationStrategy(DataGenerationStrategy):
         }
 
     def setup_scenario(self, scenario: Scenario) -> None:
+        self.scenario = scenario
         self.spawn_random_vehicles(
             bng=self.bng,
             scenario=scenario,
             number_of_vehicles=1,
             models=['etk800']
         )
-
-        # Get all model position and types
-        for obj in scenario.find_static_objects():
-            self.map_objects.append((obj.pos, obj.type))
 
         list(scenario.vehicles.values())[0].switch()
 
@@ -95,11 +94,31 @@ class ImageInXDataGenerationStrategy(DataGenerationStrategy):
         self.bbox_cache.append(bounding_boxes)
 
     def _calculate_places_of_images(self, camera: Camera):
+        def print_objects(objects):
+            for obj in objects:
+                print(f'Object Name: {obj.name} Type: {obj.type} Pos: {obj.pos} Rot: {obj.rot} Scale: {obj.scale} Options: {obj.opts}')
         # Get items from the map around the car in 25m radius
         for vehicle, cam in self.vehicle_cameras.items():
             if cam == camera:
                 current_position = vehicle.state['pos']
         total_weight = 0
+        # Get all model position and types
+        if not self.map_objects:
+            try:
+                print('Loading static instances from scenario...')
+                static_objects = self.scenario.bng.scenario.find_objects_class('TSStatic')
+                for obj in static_objects:
+                    self.map_objects.append((obj.pos, obj.type))
+                # First few objects
+                print('Loaded objects! First 5 object:')
+                print_objects(static_objects[:5])
+                print('Types of annotations:')
+                # get object.opts['annotation'] for all objects and create a set of them
+                annotations = set([obj.opts['annotation'] for obj in static_objects])
+                print(annotations)
+                print(f'Total number of objects: {len(static_objects)}')
+            except BNGValueError as e:
+                print(f'Could not load static instances from scenario: {e}')
         for obj in self.map_objects:
             if math.dist(obj[0], current_position) < 25:
                 if obj[1] in self.object_type_weights:

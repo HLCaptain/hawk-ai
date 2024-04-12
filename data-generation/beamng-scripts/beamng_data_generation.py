@@ -92,7 +92,7 @@ def main():
     generate_data(
         beamng=beamng,
         get_scenario=get_scenario,
-        strategy=imu_generation_strategy,
+        strategy=image_generation_strategy,
         number_of_iterations=number_of_iterations,
         number_of_simulations=number_of_simulations,
         monitor_data_length=iteration_duration_in_seconds,
