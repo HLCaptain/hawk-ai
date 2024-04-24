@@ -185,5 +185,4 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
                 print(f'Finished saving {self.images_saved}/{len(self.image_cache) + self.images_saved - i - 1} images')
 
         print(f'Finished saving {self.images_saved}/{self.images_saved} images')
-        self.image_cache.clear()
-        self.bbox_cache.clear()
+        self._reset_image_cache()
