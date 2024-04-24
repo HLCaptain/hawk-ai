@@ -50,16 +50,16 @@ def generate_data(
         bng.start_scenario()
 
         for iteration in range(number_of_iterations):
-            print('Setting up scenario for iteration', iteration * simulation + iteration)
+            print('Setting up scenario for iteration', number_of_iterations * simulation + iteration)
             strategy.setup_scenario(scenario)
 
-            print('Monitoring data for iteration', iteration * simulation)
-            strategy.monitor_data(monitor_data_length, iteration * simulation + iteration)
+            print('Monitoring data for iteration', number_of_iterations * simulation)
+            strategy.monitor_data(monitor_data_length, number_of_iterations * simulation + iteration)
 
-            print('Scenario cleanup for iteration', iteration * simulation + iteration)
+            print('Scenario cleanup for iteration', number_of_iterations * simulation + iteration)
             strategy.clean_scenario(scenario)
 
-            print('Ended data generation for iteration', iteration * simulation + iteration)
+            print('Ended data generation for iteration', number_of_iterations * simulation + iteration)
             strategy.finish_iteration()
 
         print('Closing simulation:', simulation)
@@ -73,7 +73,7 @@ def main():
     number_of_iterations = 20
 
     # Image generation
-    number_of_vehicles_in_traffic = 12
+    number_of_vehicles_in_traffic = 6
     image_per_iteration = 20
     # 4 simulations * 50 iterations * 20 images = 4000 images generated overall
 
@@ -86,7 +86,7 @@ def main():
     random.seed(1337 + time.time_ns())
     beamng = BeamNGpy('localhost', 64256)
 
-    image_generation_strategy = ImageInXDataGenerationStrategy(beamng, number_of_vehicles_in_traffic)
+    image_generation_strategy = ImageDataGenerationStrategy(beamng, number_of_vehicles_in_traffic)
     imu_generation_strategy = ImuDataGenerationStrategy(beamng, number_of_vehicles)
 
     generate_data(
