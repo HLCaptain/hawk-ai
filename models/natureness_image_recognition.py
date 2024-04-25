@@ -142,9 +142,10 @@ def calculate_natureness_score(bndbox_areas: dict[str, int]):
     # Split name by last '_' and get the first part
     # Remove names which are not in weights
     bndbox_areas = {name: area for name, area in bndbox_areas.items() if name in weights}
+    bndbox_areas_sum = sum(bndbox_areas.values())
     # Calculate the natureness score with atan function in [0, 1] range
     total_weight = sum([weights[name] * area for name, area in bndbox_areas.items()])
-    natureness_score = (math.atan(total_weight) + math.pi / 2) / math.pi
+    natureness_score = (math.atan(total_weight / bndbox_areas_sum) + math.pi / 2) / math.pi
     return natureness_score
 
 def load_data(data_dir):
@@ -204,7 +205,7 @@ def main():
 
     model = NaturenessRegressionModel(ConvNextModel.from_pretrained("facebook/convnext-tiny-224"))
 
-    trainer = Trainer(max_epochs=100)
+    trainer = Trainer(max_epochs=25)
     trainer.fit(model, dataloaders['train'], dataloaders['val'])
 
     # Eval
@@ -218,8 +219,6 @@ def main():
         y_pred.extend(model(x).tolist())
         y_true.extend(y.tolist())
 
-    plt.scatter(y_true, y_pred)
-
     # Show example images with their predicted and actual values
     for i in range(5):
         x, y = dataloaders['test'].dataset[i]
@@ -227,6 +226,17 @@ def main():
         plt.imshow(x.permute(1, 2, 0))
         plt.title(f"Predicted: {y_pred:.2f}, Actual: {y:.2f}")
         plt.show()
+
+    # Save 5 pictures with their predicted and actual values
+    for i in range(5):
+        x, y = dataloaders['test'].dataset[i]
+        y_pred = model(x.unsqueeze(0)).item()
+        plt.imshow(x.permute(1, 2, 0))
+        plt.title(f"Predicted: {y_pred:.2f}, Actual: {y:.2f}")
+        plt.savefig(f"example_{i}.png")
+
+    # Save the model
+    torch.save(model.state_dict(), 'natureness_model.pth')
 
 if __name__ == '__main__':
     main()
