@@ -1,27 +1,25 @@
 import os
 import glob
-import wandb
-import webp
-
-from sklearn.model_selection import train_test_split
+import numpy as np
+import matplotlib.pyplot as plt
 import torch
-from transformers import AutoImageProcessor, ConvNextModel
-import torchvision
-import torchmetrics
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
-import matplotlib.pyplot as plt
-import numpy as np
-from lightly.transforms import utils
-from lightly.models.utils import deactivate_requires_grad
-import lightning as l
+import torchvision.transforms as transforms
+from transformers import ConvNextModel
+from pytorch_lightning import LightningModule, Trainer
+import webp
+from sklearn.model_selection import train_test_split
+from lightly.transforms.utils import IMAGENET_NORMALIZE
+import xml.etree.ElementTree as ET
+import re
+import math
 
 class NaturnessDataset(Dataset):
-    def __init__(self, x, y, transform=None, target_transform=None):
-        self.image_paths = x
-        self.labels = y
+    def __init__(self, image_paths, labels, transform=None):
+        self.image_paths = image_paths
+        self.labels = labels
         self.transform = transform
-        self.target_transform = target_transform
 
     def __len__(self):
         return len(self.labels)
@@ -31,180 +29,204 @@ class NaturnessDataset(Dataset):
         label = self.labels[idx]
         if self.transform:
             image = self.transform(image)
-        if self.target_transform:
-            label = self.target_transform(label)
         return image, label
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-num_workers = os.cpu_count()
-batch_size = 16
-memory_bank_size = 4096
-seed = 1
-max_epochs = 100
-data_dir = '../data'
-accelerator = "gpu" if torch.cuda.is_available() else "cpu"
-
-class NaturenessRegressionModel(l.LightningModule):
-    def __init__(self, backbone, freeze, net):
+class NaturenessRegressionModel(LightningModule):
+    def __init__(self, backbone, freeze_backbone=False):
         super().__init__()
         self.backbone = backbone
-
-        if freeze:
-            # freeze the backbone
-            deactivate_requires_grad(backbone)
-
-        # create a linear layer for downstream classification model
-        self.fc = net
-
+        if freeze_backbone:
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+        self.fc = nn.Linear(768, 1)
         self.criterion = nn.MSELoss()
-        #self.accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=num_classes)
-        self.validation_step_outputs = []
 
     def forward(self, x):
-        x = x.to(device)
-        y_hat = self.backbone(x).pooler_output
-        y_hat = self.fc(y_hat)
-        return y_hat
+        x = self.backbone(x).pooler_output
+        return self.fc(x).squeeze()
+
+    def step(self, batch):
+        x, y = batch
+        y_hat = self(x)
+        loss = self.criterion(y_hat, y)
+        return loss
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        x, y = x.to(device), y.to(device)
-        y_hat = self.forward(x).squeeze()
-        loss = self.criterion(y_hat, y)
+        loss = self.step(batch)
         self.log("train_loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch
-        x, y = x.to(device), y.to(device)
-        y_hat = self.forward(x).squeeze()
-        loss = self.criterion(y_hat, y)
-        self.validation_step_outputs.append(loss)
+        loss = self.step(batch)
+        self.log("val_loss", loss)
         return loss
 
     def test_step(self, batch, batch_idx):
-        x, y = batch
-        x, y = x.to(device), y.to(device)
-        y_hat = self.forward(x).squeeze()
-        loss = self.criterion(y_hat, y)
+        loss = self.step(batch)
         self.log("test_loss", loss)
         return loss
 
-    def predict_step(self, batch, batch_idx):
-        x, y = batch
-        x, y = x.to(device), y.to(device)
-        y_hat = self(x)
-        return (y_hat, y)
-
     def configure_optimizers(self):
-        optim = torch.optim.Adam(self.fc.parameters(), lr=0.002884)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
+        optim = torch.optim.Adam(self.parameters(), lr=0.002884)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=100)
         return [optim], [scheduler]
 
-# main
-def main():
-    wandb.login()
-    torch.cuda.manual_seed_all(seed)
+def parse_xml_for_bndbox_areas(xml_file):
+    # Parse the XML file
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
 
+    # Dictionary to hold the object names and their bounding box areas
+    bndbox_areas = {}
+
+    filename = root.find('filename').text
+
+    # Iterate through each object in the XML
+    for object_tag in root.findall('object'):
+        name = object_tag.find('name').text
+        bndbox = object_tag.find('bndbox')
+        xmin = int(bndbox.find('xmin').text)
+        ymin = int(bndbox.find('ymin').text)
+        xmax = int(bndbox.find('xmax').text)
+        ymax = int(bndbox.find('ymax').text)
+
+        # Calculate the area of the bounding box
+        area = (xmax - xmin) * (ymax - ymin)
+
+        # Store the area using the name as the key
+        cleaned_name = re.sub(r'_\d+$', '', name)
+        if name not in bndbox_areas:
+            bndbox_areas[cleaned_name] = area
+        else:
+            bndbox_areas[cleaned_name] += area
+
+    return (filename, bndbox_areas)
+
+def calculate_natureness_score(bndbox_areas: dict[str, int]):
+    # Assign natureness value to each object in [-1, 1] range 1 being most natural and -1 being least natural
+    # 'SKY': 3747,
+    # 'BUILDINGS': 30395,
+    # 'POLE': 53873,
+    # 'NATURE': 40554,
+    # 'GUARD_RAIL': 11840,
+    # 'OBSTACLES': 9234,
+    # '': 4796,
+    # 'CAR': 3811,
+    # 'WATER': 2022,
+    # 'SIDEWALK': 2619,
+    # 'STREET': 3331,
+    # 'ROCK': 2405,
+    # 'SAND': 934,
+    # 'TRAFFIC_SIGNS': 656,
+    # 'ROADBLOCK': 4746,
+    # 'SOLID_LINE': 3,
+    # 'RESTRICTED_STREET': 18
+    weights = {
+        'SKY': 1.0,
+        'BUILDINGS':-1.0,
+        'POLE': -0.5,
+        'NATURE': 1.0,
+        'GUARD_RAIL': -0.5,
+        'OBSTACLES': -0.2,
+        'CAR': -0.7,
+        'WATER': 1.0,
+        'SIDEWALK': -0.4,
+        'STREET': -0.1,
+        'ROCK': 1.0,
+        'SAND': 1.0,
+        'TRAFFIC_SIGNS': -0.4,
+        'ROADBLOCK': 0.1,
+        'SOLID_LINE': -0.1,
+        'RESTRICTED_STREET': -0.1
+    }
+    # Split name by last '_' and get the first part
+    # Remove names which are not in weights
+    bndbox_areas = {name: area for name, area in bndbox_areas.items() if name in weights}
+    # Calculate the natureness score with atan function in [0, 1] range
+    total_weight = sum([weights[name] * area for name, area in bndbox_areas.items()])
+    natureness_score = (math.atan(total_weight) + math.pi / 2) / math.pi
+    return natureness_score
+
+def load_data(data_dir):
     image_paths = glob.glob(os.path.join(data_dir, '**', '*.webp'), recursive=True)
-    x = np.array(image_paths)
-    print(len(x))
-    print(x[2], x[-1])
+    xml_paths = glob.glob(os.path.join(data_dir, '**', '*.xml'), recursive=True)
+    labels = []
+    for xml_path in xml_paths:
+        filename, bndbox_areas = parse_xml_for_bndbox_areas(xml_path)
+        # Find filename in image_paths and get the index (image_path can be in subdirectories)
+        # index = [i for i, path in enumerate(image_paths) if path.endswith(filename)][0]
+        labels.append(calculate_natureness_score(bndbox_areas))
+    print(f"Loaded {len(image_paths)} images and {len(labels)} labels")
+    labels = np.array(labels).astype(np.float32)
+    return train_test_split(image_paths, labels, test_size=0.2, random_state=42)
 
-    # until labels are available
-    y = np.random.uniform(low=0.0, high=1.0, size=(len(image_paths)))
-    # convert y to float32
-    y = y.astype(np.float32)
-    print(len(y))
-    print(y[2], y[-1])
+def create_dataloaders(train_data, val_data, test_data, batch_size, num_workers):
+    train_transform = transforms.Compose([
+        transforms.RandomCrop(896, padding=4), # Random crop to 896x896
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        # transforms.Normalize(
+        #     mean=IMAGENET_NORMALIZE["mean"],
+        #     std=IMAGENET_NORMALIZE["std"],
+        # ),
+    ])
+    test_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        # transforms.Normalize(
+        #     mean=IMAGENET_NORMALIZE["mean"],
+        #     std=IMAGENET_NORMALIZE["std"],
+        # ),
+    ])
 
-    img = webp.load_image(x[2])
-    plt.imshow(img)
+    datasets = {
+        'train': NaturnessDataset(*train_data, transform=train_transform),
+        'val': NaturnessDataset(*val_data, transform=test_transform),
+        'test': NaturnessDataset(*test_data, transform=test_transform)
+    }
 
-    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, random_state=42)
+    return {
+        'train': DataLoader(datasets['train'], batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True, persistent_workers=True),
+        'val': DataLoader(datasets['val'], batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True, persistent_workers=True),
+        'test': DataLoader(datasets['test'], batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True, persistent_workers=True)
+    }
+
+def main():
+    data_dir = '../data'
+    batch_size = 16
+    num_workers = os.cpu_count() or 1
+
+    x_train, x_test, y_train, y_test = load_data(data_dir)
     x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
 
-    print("Train data:", x_train.shape, y_train.shape)
-    print("Test data:", x_test.shape, y_test.shape)
-    print("Validation data:", x_val.shape, y_val.shape)
+    dataloaders = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, num_workers)
 
-    train_transforms = torchvision.transforms.Compose(
-        [
-            torchvision.transforms.RandomCrop(32, padding=4),
-            torchvision.transforms.RandomHorizontalFlip(),
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize(
-                mean=utils.IMAGENET_NORMALIZE["mean"],
-                std=utils.IMAGENET_NORMALIZE["std"],
-            ),
-        ]
-    )
+    model = NaturenessRegressionModel(ConvNextModel.from_pretrained("facebook/convnext-tiny-224"))
 
-    # No additional augmentations for the test set
-    test_transforms = torchvision.transforms.Compose(
-        [
-            torchvision.transforms.Resize((32, 32)),
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize(
-                mean=utils.IMAGENET_NORMALIZE["mean"],
-                std=utils.IMAGENET_NORMALIZE["std"],
-            ),
-        ]
-    )
+    trainer = Trainer(max_epochs=100)
+    trainer.fit(model, dataloaders['train'], dataloaders['val'])
 
-    dataset_train = NaturnessDataset(x_train, y_train, transform=train_transforms)
-    dataset_valid = NaturnessDataset(x_val, y_val, transform=test_transforms)
-    dataset_test = NaturnessDataset(x_test, y_test, transform=test_transforms)
+    # Eval
+    trainer.test(model, dataloaders['test'])
 
-    dataloader_train = DataLoader(
-        dataset_train,
-        batch_size=batch_size,
-        shuffle=True,
-        drop_last=True,
-        num_workers=num_workers,
-        persistent_workers=True,
-    )
+    # Compare predicted and actual values
+    model.eval()
+    y_pred = []
+    y_true = []
+    for x, y in dataloaders['test']:
+        y_pred.extend(model(x).tolist())
+        y_true.extend(y.tolist())
 
-    dataloader_valid = DataLoader(
-        dataset_valid,
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=True,
-        num_workers=num_workers,
-        persistent_workers=True,
-    )
+    plt.scatter(y_true, y_pred)
 
-    dataloader_test = DataLoader(
-        dataset_test,
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=True,
-        num_workers=num_workers,
-        persistent_workers=True,
-    )
-
-    convnext_model = ConvNextModel.from_pretrained("facebook/convnext-tiny-224")
-    reg_layer = nn.Linear(768, 1)
-    reg_model = NaturenessRegressionModel(convnext_model, False, reg_layer)
-
-    '''
-    wandb_logger = pl.loggers.WandbLogger(
-        name="backbone", project="Natureness Image Recognition"
-    )
-    callback = pl.callbacks.ModelCheckpoint(
-        monitor='train_loss',
-        mode='min',
-        dirpath = '../ckpts/',
-        filename = 'best_backbone',
-    )
-    '''
-
-    trainer = l.Trainer(
-        max_epochs=max_epochs, accelerator=accelerator, #logger=[wandb_logger], callbacks=[callback]
-    )
-    trainer.fit(model=reg_model, train_dataloaders=dataloader_train, val_dataloaders=dataloader_valid)
-
-    #wandb.finish()
+    # Show example images with their predicted and actual values
+    for i in range(5):
+        x, y = dataloaders['test'].dataset[i]
+        y_pred = model(x.unsqueeze(0)).item()
+        plt.imshow(x.permute(1, 2, 0))
+        plt.title(f"Predicted: {y_pred:.2f}, Actual: {y:.2f}")
+        plt.show()
 
 if __name__ == '__main__':
     main()
