@@ -127,17 +127,17 @@ def calculate_natureness_score(bndbox_areas: dict[str, int]):
         'POLE': -0.5,
         'NATURE': 1.0,
         'GUARD_RAIL': -0.5,
-        'OBSTACLES': -0.2,
-        'CAR': -0.7,
+        'OBSTACLES': -0.5,
+        'CAR': -0.5,
         'WATER': 1.0,
-        'SIDEWALK': -0.4,
-        'STREET': -0.1,
+        'SIDEWALK': -0.8,
+        'STREET': -0.2,
         'ROCK': 1.0,
         'SAND': 1.0,
         'TRAFFIC_SIGNS': -0.4,
-        'ROADBLOCK': 0.1,
+        'ROADBLOCK': 0.2,
         'SOLID_LINE': -0.1,
-        'RESTRICTED_STREET': -0.1
+        'RESTRICTED_STREET': 0.1
     }
     # Split name by last '_' and get the first part
     # Remove names which are not in weights
