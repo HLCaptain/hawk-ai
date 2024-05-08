@@ -148,7 +148,7 @@ def calculate_natureness_score(bndbox_areas: dict[str, int]):
     natureness_score = (math.atan(total_weight / bndbox_areas_sum) + math.pi / 2) / math.pi
     return natureness_score
 
-def load_data(data_dir):
+def load_data(data_dir, threshold):
     image_paths = glob.glob(os.path.join(data_dir, '**', '*.webp'), recursive=True)
     xml_paths = glob.glob(os.path.join(data_dir, '**', '*.xml'), recursive=True)
     labels = []
@@ -166,7 +166,21 @@ def load_data(data_dir):
     image_paths = image_paths[labels != -100.]
     labels = labels[labels != -100.]
     print(f"Loaded {len(image_paths)} images and {len(labels)} labels")
-    return train_test_split(image_paths, labels, test_size=0.2, random_state=42)
+    nature_x = image_paths[labels >= threshold]
+    nature_y = labels[labels >= threshold]
+    city_x = image_paths[labels < threshold]
+    city_y = labels[labels < threshold]
+    print(f"Size of nature dataset: {len(nature_y)}, size of city dataset: {len(city_y)}")
+    return {
+        "nature": {
+            "data": nature_x,
+            "label": nature_y,
+        },
+        "city": {
+            "data": city_x,
+            "label": city_y,
+        }
+    }
 
 def create_dataloaders(train_data, val_data, test_data, batch_size, num_workers):
     train_transform = transforms.Compose([
@@ -204,46 +218,55 @@ def main():
     data_dir = '../data'
     batch_size = 16
     num_workers = os.cpu_count() or 1
-
-    x_train, x_test, y_train, y_test = load_data(data_dir)
-    x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
+    threshold = 0.6 # labels are between 0.25 and 0.75
     
-    dataloaders = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, num_workers)
+    dataset = load_data(data_dir, threshold)
+    dataloaders = {}
+    
+    for data_type in ["nature", "city"]:
+        x_train, x_test, y_train, y_test = train_test_split(dataset[data_type]["data"], dataset[data_type]["label"],
+                                                            test_size=0.2, random_state=42)
+        x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
 
-    model = NaturenessRegressionModel(ConvNextModel.from_pretrained("facebook/convnext-tiny-224"))
+        dataloaders[data_type] = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, num_workers)
+        
+    for model_type in ["nature", "city"]:
 
-    trainer = Trainer(max_epochs=25)
-    trainer.fit(model, dataloaders['train'], dataloaders['val'])
+        model = NaturenessRegressionModel(ConvNextModel.from_pretrained("facebook/convnext-tiny-224"))
 
-    # Eval
-    trainer.test(model, dataloaders['test'])
+        trainer = Trainer(max_epochs=25)
+        trainer.fit(model, dataloaders[model_type]['train'], dataloaders[model_type]['val'])
 
-    # Compare predicted and actual values
-    model.eval()
-    y_pred = []
-    y_true = []
-    for x, y in dataloaders['test']:
-        y_pred.extend(model(x).tolist())
-        y_true.extend(y.tolist())
+        # Eval
+        for test_type in ["nature", "city"]:
+            trainer.test(model, dataloaders[test_type]['test'])
 
-    # Show example images with their predicted and actual values
-    for i in range(5):
-        x, y = dataloaders['test'].dataset[i]
-        y_pred = model(x.unsqueeze(0)).item()
-        plt.imshow(x.permute(1, 2, 0))
-        plt.title(f"Predicted: {y_pred:.2f}, Actual: {y:.2f}")
-        plt.show()
+            # Compare predicted and actual values
+            model.eval()
+            y_pred = []
+            y_true = []
+            for x, y in dataloaders[test_type]['test']:
+                y_pred.extend(model(x).tolist())
+                y_true.extend(y.tolist())
 
-    # Save 5 pictures with their predicted and actual values
-    for i in range(5):
-        x, y = dataloaders['test'].dataset[i]
-        y_pred = model(x.unsqueeze(0)).item()
-        plt.imshow(x.permute(1, 2, 0))
-        plt.title(f"Predicted: {y_pred:.2f}, Actual: {y:.2f}")
-        plt.savefig(f"example_{i}.png")
+            # Show example images with their predicted and actual values
+            for i in range(5):
+                x, y = dataloaders[test_type]['test'].dataset[i]
+                y_pred = model(x.unsqueeze(0)).item()
+                plt.imshow(x.permute(1, 2, 0))
+                plt.title(f"Predicted: {y_pred:.2f}, Actual: {y:.2f}")
+                plt.show()
 
-    # Save the model
-    torch.save(model.state_dict(), 'natureness_model.pth')
+            # Save 5 pictures with their predicted and actual values
+            for i in range(5):
+                x, y = dataloaders[test_type]['test'].dataset[i]
+                y_pred = model(x.unsqueeze(0)).item()
+                plt.imshow(x.permute(1, 2, 0))
+                plt.title(f"Predicted: {y_pred:.2f}, Actual: {y:.2f}")
+                plt.savefig(f"example_{test_type}_on_{model_type}model_{i}.png")
+
+        # Save the model
+        torch.save(model.state_dict(), f"{model_type}ness_model.pth")
 
 if __name__ == '__main__':
     main()
