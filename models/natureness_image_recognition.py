@@ -156,9 +156,16 @@ def load_data(data_dir):
         filename, bndbox_areas = parse_xml_for_bndbox_areas(xml_path)
         # Find filename in image_paths and get the index (image_path can be in subdirectories)
         # index = [i for i, path in enumerate(image_paths) if path.endswith(filename)][0]
-        labels.append(calculate_natureness_score(bndbox_areas))
-    print(f"Loaded {len(image_paths)} images and {len(labels)} labels")
+        try:
+            labels.append(calculate_natureness_score(bndbox_areas))
+        except:
+            labels.append(-100.) # invalid value
     labels = np.array(labels).astype(np.float32)
+    image_paths = np.array(image_paths)
+    # Filter out the images with invalid label
+    image_paths = image_paths[labels != -100.]
+    labels = labels[labels != -100.]
+    print(f"Loaded {len(image_paths)} images and {len(labels)} labels")
     return train_test_split(image_paths, labels, test_size=0.2, random_state=42)
 
 def create_dataloaders(train_data, val_data, test_data, batch_size, num_workers):
@@ -200,7 +207,7 @@ def main():
 
     x_train, x_test, y_train, y_test = load_data(data_dir)
     x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
-
+    
     dataloaders = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, num_workers)
 
     model = NaturenessRegressionModel(ConvNextModel.from_pretrained("facebook/convnext-tiny-224"))
