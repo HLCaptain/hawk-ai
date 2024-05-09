@@ -10,6 +10,7 @@ from transformers import ConvNextModel
 from pytorch_lightning import LightningModule, Trainer
 import webp
 from sklearn.model_selection import train_test_split
+from sklearn import metrics
 from lightly.transforms.utils import IMAGENET_NORMALIZE
 import xml.etree.ElementTree as ET
 import re
@@ -65,6 +66,11 @@ class NaturenessRegressionModel(LightningModule):
         loss = self.step(batch)
         self.log("test_loss", loss)
         return loss
+    
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        return (y_hat, y)
 
     def configure_optimizers(self):
         optim = torch.optim.Adam(self.parameters(), lr=0.002884)
@@ -214,6 +220,39 @@ def create_dataloaders(train_data, val_data, test_data, batch_size, num_workers)
         'test': DataLoader(datasets['test'], batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True, persistent_workers=True)
     }
 
+def scores(y_true, y_pred, cutoff=0.7):
+    y_true = np.array(y_true)
+    #y_pred['nature'] = np.array(y_pred_nature)
+    #y_pred['city'] = np.array(y_pred_city)
+    y_pred = np.array(y_pred)
+
+    y_true_classes = np.zeros_like(y_true) # initialise a matrix full with zeros
+    y_true_classes[y_true > cutoff] = 1 # add a 1 if the cutoff was breached
+    #y_pred_classes = {}
+    #y_pred_classes['nature'] = np.zeros_like(y_pred['nature'])
+    #y_pred_classes['nature'][y_pred['nature'] > cutoff] = 1
+    #y_pred_classes['city'] = np.zeros_like(y_pred['city'])
+    #y_pred_classes['city'][y_pred['city'] > cutoff] = 1
+    y_pred_classes = np.zeros_like(y_pred)
+    y_pred_classes[y_pred > cutoff] = 1
+    
+    #Dice_pred_nature = 2* np.sum(np.multiply(y_pred['nature'], y_true))/(np.sum(y_pred['nature'])*np.sum(y_true))
+    #Dice_pred_city = 2* np.sum(np.multiply(y_pred['city'], y_true))/(np.sum(y_pred['city'])*np.sum(y_true))
+    #Dice_preds = 2* np.sum(np.multiply(y_pred['nature'], y_pred['city']))/(np.sum(y_pred['nature'])*np.sum(y_pred['city']))
+    #print(f"Dice score for nature model: {Dice_pred_nature}\nDice score for city model: {Dice_pred_city}\nDice score for the two models in comparison: {Dice_preds}")
+    Dice = 2* np.sum(np.multiply(y_pred, y_true))/(np.sum(y_pred)*np.sum(y_true))
+    
+    #for data_type in ['nature', 'city']:
+    tp, fp, fn, tn  = metrics.confusion_matrix(y_true_classes, y_pred_classes).ravel()
+    #roc_curve(test, pred, drop_intermediate=False)
+    #print(tp, fp, fn, tn)
+    IoU = tp / (tp+fn+fp)
+    #print(f"IoU-score of {data_type}ness model: {IoU}")
+    
+    DSC = (2*tp) / (2*tp+fn+fp)
+    #print(f"DSC-score of {data_type}ness model: {DSC}")
+    return Dice, IoU, DSC
+
 def main():
     data_dir = '../data'
     batch_size = 16
@@ -264,6 +303,10 @@ def main():
                 plt.imshow(x.permute(1, 2, 0))
                 plt.title(f"Predicted: {y_pred:.2f}, Actual: {y:.2f}")
                 plt.savefig(f"example_{test_type}_on_{model_type}model_{i}.png")
+                
+            y_pred, y_true = trainer.predict(model, dataloaders[test_type]['test'])[0]
+            Dice, IoU, DSC = scores(y_true, y_pred)
+            print(f"Scores of {model_type}ness model tested on {test_type} images:\nDice-score: {Dice}\nIoU-score: {IoU}\nDSC-score: {DSC}")
 
         # Save the model
         torch.save(model.state_dict(), f"{model_type}ness_model.pth")
