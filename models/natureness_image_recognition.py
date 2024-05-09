@@ -257,7 +257,7 @@ def main():
         model.eval()
         y_pred = []
         y_true = []
-        for x, y in dataloaders['test']:
+        for x, y in dataloaders[model_type]['test']:
             y_pred.extend(model(x).tolist())
             y_true.extend(y.tolist())
 
