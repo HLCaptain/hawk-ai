@@ -8,7 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 from transformers import ConvNextModel
 from lightning import LightningModule, Trainer
-from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, Callback
 import webp
 from sklearn.model_selection import train_test_split
 from lightly.transforms.utils import IMAGENET_NORMALIZE
@@ -18,20 +18,21 @@ import math
 import optuna
 
 class NaturnessDataset(Dataset):
-    def __init__(self, image_paths, labels, transform=None):
-        self.image_paths = image_paths
+    def __init__(self, images, labels, transform=None):
         self.labels = labels
         self.transform = transform
+        # Load images
+        # self.images = [webp.load_image(path).convert('RGB') for path in image_paths]
+        self.images = images
+        # Transform images
+        if transform:
+            self.images = [transform(image) for image in self.images]
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        image = webp.load_image(self.image_paths[idx]).convert('RGB')
-        label = self.labels[idx]
-        if self.transform:
-            image = self.transform(image)
-        return image, label
+        return self.images[idx], self.labels[idx]
 
 class NaturenessRegressionModel(LightningModule):
     def __init__(self, backbone, freeze_backbone=False, optimizer=None, scheduler=None):
@@ -199,18 +200,23 @@ def create_dataloaders(train_data, val_data, test_data, batch_size, num_workers)
     }
 
     return {
-        'train': DataLoader(datasets['train'], batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True, persistent_workers=True),
-        'val': DataLoader(datasets['val'], batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True, persistent_workers=True),
-        'test': DataLoader(datasets['test'], batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True, persistent_workers=True)
+        'train': DataLoader(datasets['train'], batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True, persistent_workers=True, pin_memory=True),
+        'val': DataLoader(datasets['val'], batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True, persistent_workers=True, pin_memory=True),
+        'test': DataLoader(datasets['test'], batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True, persistent_workers=True, pin_memory=True)
     }
 
-def train_with_trial(trial, data, target, model_type):
-    batch_size = trial.suggest_categorical('batch_size', [16, 32, 64])
-    x_train, x_test, y_train, y_test = train_test_split(data, target, test_size=0.2, random_state=42)
-    x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
-    dataloader = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, os.cpu_count() or 1)
+class TrialReportCallback(Callback):
+    def __init__(self, trial):
+        self.trial = trial
+
+    def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self.trial.report(trainer.callback_metrics['val_loss'], trainer.current_epoch)
+        if self.trial.should_prune():
+            raise optuna.TrialPruned()
+
+def train_with_trial(trial, dataloader, model_type):
     backbone = ConvNextModel.from_pretrained("facebook/convnext-tiny-224")
-    trainer = Trainer(max_epochs=50, callbacks=[EarlyStopping(monitor='val_loss', patience=5), ModelCheckpoint(dirpath='checkpoints/', filename=model_type + '-{val_loss:.2f}', save_top_k=1)])
+    trainer = Trainer(max_epochs=50, callbacks=[EarlyStopping(monitor='val_loss', patience=5), ModelCheckpoint(dirpath='checkpoints/', filename=model_type + '-{val_loss:.2f}', save_top_k=1), TrialReportCallback(trial)], num_sanity_val_steps=0)
     learning_rate = trial.suggest_loguniform('learning_rate', 1e-5, 1e-2)
     optimizer = torch.optim.Adam(lr=learning_rate, params=backbone.parameters())
     t_max = trial.suggest_int('t_max', 50, 200)
@@ -226,35 +232,44 @@ def main():
 
     num_workers = os.cpu_count() or 1
 
-    image_paths, labels = load_data(data_dir)
+    all_image_paths, all_labels = load_data(data_dir)
+    all_images = np.array([webp.load_image(path).convert('RGB') for path in all_image_paths])
 
     # Choose a primary threshold based on percentiles or fixed value
-    primary_threshold = np.percentile(labels, 50)  # 50th percentile or 0.5
+    primary_threshold = np.percentile(all_labels, 50)  # 50th percentile or 0.5
 
     # Probabilities for selection in nature group
     # You can adjust the steepness and center of this sigmoid function
-    nature_probabilities = 1 / (1 + np.exp(-25 * (labels - primary_threshold)))
+    nature_probabilities = 1 / (1 + np.exp(-25 * (all_labels - primary_threshold)))
 
     # Randomly select indices based on calculated probabilities
-    nature_mask = np.random.rand(*labels.shape) < nature_probabilities
+    nature_mask = np.random.rand(*all_labels.shape) < nature_probabilities
     urban_mask = ~nature_mask
 
     nature_indices = np.where(nature_mask)[0]
     urban_indices = np.where(urban_mask)[0]
 
-    plt.hist(labels[nature_indices], bins=100, alpha=0.5, label='Nature')
-    plt.hist(labels[urban_indices], bins=100, alpha=0.5, label='Urban')
+    plt.hist(all_labels[nature_indices], bins=100, alpha=0.5, label='Nature')
+    plt.hist(all_labels[urban_indices], bins=100, alpha=0.5, label='Urban')
     plt.legend()
     plt.show()
 
-    nature_image_paths = image_paths[nature_indices]
-    nature_labels = labels[nature_indices]
-    urban_image_paths = image_paths[urban_indices]
-    urban_labels = labels[urban_indices]
-
-
+    nature_images = all_images[nature_indices]
+    nature_labels = all_labels[nature_indices]
+    urban_images = all_images[urban_indices]
+    urban_labels = all_labels[urban_indices]
 
     dataloaders = {}
+    model_types = ['all', 'nature', 'urban']
+    images_and_labels = [(all_images, all_labels), (nature_images, nature_labels), (urban_images, urban_labels)]
+
+    for model_type, (images, labels) in zip(model_types, images_and_labels):
+        dataloaders[model_type] = {}
+        for batch_size in [16, 32, 64]:
+            x_train, x_test, y_train, y_test = train_test_split(images, labels, test_size=0.2, random_state=42)
+            x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
+            dataloaders[model_type][batch_size] = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, num_workers)
+
     models = {}
 
     # trainer.fit(models['all'], dataloaders['all']['train'], dataloaders['all']['val'])
@@ -262,14 +277,18 @@ def main():
     # trainer.fit(models['urban'], dataloaders['urban']['train'], dataloaders['urban']['val'])
 
     def train_all(trial):
-        return train_with_trial(trial, image_paths, labels, 'all')
+        dataloader = dataloaders['all'][trial.suggest_categorical('batch_size', [16, 32, 64])]
+        return train_with_trial(trial, dataloader, 'all')
 
     def train_nature(trial):
-        return train_with_trial(trial, nature_image_paths, nature_labels, 'nature')
+        dataloader = dataloaders['nature'][trial.suggest_categorical('batch_size', [16, 32, 64])]
+        return train_with_trial(trial, dataloader, 'nature')
 
     def train_urban(trial):
-        return train_with_trial(trial, urban_image_paths, urban_labels, 'urban')
+        dataloader = dataloaders['urban'][trial.suggest_categorical('batch_size', [16, 32, 64])]
+        return train_with_trial(trial, dataloader, 'urban')
 
+    torch.set_float32_matmul_precision('medium')
     for objective in [train_all, train_nature, train_urban]:
         study = optuna.create_study(direction='minimize')
         study.optimize(objective, n_trials=25)
@@ -280,7 +299,6 @@ def main():
     # trainer.test(models['nature'], dataloaders['nature']['test'])
     # trainer.test(models['urban'], dataloaders['urban']['test'])
 
-    model_types = ['all', 'nature', 'urban']
     for model_type in model_types:
         # Get all model checkpoint paths and load the best one
         best_ckpt_path= None
