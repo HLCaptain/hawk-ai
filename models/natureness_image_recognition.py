@@ -255,20 +255,15 @@ def main():
     # Compare predicted and actual values
     for model_type, model in models.items():
         model.eval()
-        y_pred = []
-        y_true = []
-        for x, y in dataloaders[model_type]['test']:
-            y_pred.extend(model(x).tolist())
-            y_true.extend(y.tolist())
-
-        # Show example images with their predicted and actual values
-        for i in range(5):
-            x, y = dataloaders[model_type]['test'].dataset[i]
-            y_pred = model(x.unsqueeze(0)).item()
-            plt.imshow(x.permute(1, 2, 0))
-            plt.title(f"Model type: {model_type}\nPredicted: {y_pred:.2f}, Actual: {y:.2f}")
-            plt.show()
-            plt.savefig(f"example_{i}.png")
+        for m_type in model_types:
+            # Show example images with their predicted and actual values
+            for i in range(4):
+                x, y = dataloaders[m_type]['test'].dataset[i]
+                y_pred = model(x.unsqueeze(0)).item()
+                plt.imshow(x.permute(1, 2, 0))
+                plt.title(f"Model type: {model_type}, Dataset: {m_type}\nPredicted: {y_pred:.2f}, Actual: {y:.2f}")
+                plt.show()
+                plt.savefig(f"example_{i}_model_{model_type}_data_{m_type}.png")
 
         # Save the model
         torch.save(model.state_dict(), f'natureness_model_{model_type}.pth')
