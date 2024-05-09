@@ -7,13 +7,15 @@ from torch import nn
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 from transformers import ConvNextModel
-from pytorch_lightning import LightningModule, Trainer
+from lightning import LightningModule, Trainer
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 import webp
 from sklearn.model_selection import train_test_split
 from lightly.transforms.utils import IMAGENET_NORMALIZE
 import xml.etree.ElementTree as ET
 import re
 import math
+import optuna
 
 class NaturnessDataset(Dataset):
     def __init__(self, image_paths, labels, transform=None):
@@ -32,7 +34,7 @@ class NaturnessDataset(Dataset):
         return image, label
 
 class NaturenessRegressionModel(LightningModule):
-    def __init__(self, backbone, freeze_backbone=False):
+    def __init__(self, backbone, freeze_backbone=False, optimizer=None, scheduler=None):
         super().__init__()
         self.backbone = backbone
         if freeze_backbone:
@@ -40,6 +42,8 @@ class NaturenessRegressionModel(LightningModule):
                 param.requires_grad = False
         self.fc = nn.Linear(768, 1)
         self.criterion = nn.MSELoss()
+        self.optimizer = optimizer
+        self.scheduler = scheduler
 
     def forward(self, x):
         x = self.backbone(x).pooler_output
@@ -67,8 +71,8 @@ class NaturenessRegressionModel(LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optim = torch.optim.Adam(self.parameters(), lr=0.002884)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=100)
+        optim = self.optimizer or torch.optim.Adam(self.parameters(), lr=1e-3)
+        scheduler = self.scheduler or torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=100)
         return [optim], [scheduler]
 
 def parse_xml_for_bndbox_areas(xml_file):
@@ -166,7 +170,7 @@ def load_data(data_dir):
         image_paths.pop(index)
     print(f"Loaded {len(image_paths)} images and {len(labels)} labels (removed {len(invalid_image_indices)} invalid images)")
     labels = np.array(labels).astype(np.float32)
-    return image_paths, labels
+    return np.array(image_paths), labels
 
 def create_dataloaders(train_data, val_data, test_data, batch_size, num_workers):
     train_transform = transforms.Compose([
@@ -200,9 +204,26 @@ def create_dataloaders(train_data, val_data, test_data, batch_size, num_workers)
         'test': DataLoader(datasets['test'], batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True, persistent_workers=True)
     }
 
+def train_with_trial(trial, data, target, model_type):
+    batch_size = trial.suggest_categorical('batch_size', [16, 32, 64])
+    x_train, x_test, y_train, y_test = train_test_split(data, target, test_size=0.2, random_state=42)
+    x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
+    dataloader = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, os.cpu_count() or 1)
+    backbone = ConvNextModel.from_pretrained("facebook/convnext-tiny-224")
+    trainer = Trainer(max_epochs=50, callbacks=[EarlyStopping(monitor='val_loss', patience=5), ModelCheckpoint(dirpath='checkpoints/', filename=model_type + '-{val_loss:.2f}', save_top_k=1)])
+    learning_rate = trial.suggest_loguniform('learning_rate', 1e-5, 1e-2)
+    optimizer = torch.optim.Adam(lr=learning_rate, params=backbone.parameters())
+    t_max = trial.suggest_int('t_max', 50, 200)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
+    model = NaturenessRegressionModel(backbone, optimizer=optimizer, scheduler=scheduler)
+    trainer.fit(model, dataloader['train'], dataloader['val'])
+    test = trainer.test(model, dataloader['test'])
+    print(test)
+    return test[0]['test_loss']
+
 def main():
     data_dir = '../data'
-    batch_size = 16
+
     num_workers = os.cpu_count() or 1
 
     image_paths, labels = load_data(data_dir)
@@ -231,29 +252,51 @@ def main():
     urban_image_paths = image_paths[urban_indices]
     urban_labels = labels[urban_indices]
 
-    trainer = Trainer(max_epochs=25)
+
 
     dataloaders = {}
     models = {}
-    model_types = ['all', 'nature', 'urban']
-    inputs_targets = [(image_paths, labels), (nature_image_paths, nature_labels), (urban_image_paths, urban_labels)]
-    for model_type, (data, target) in zip(model_types, inputs_targets):
-        x_train, x_test, y_train, y_test = train_test_split(data, target, test_size=0.2, random_state=42)
-        x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
-        dataloaders[model_type] = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, num_workers)
-        models[model_type] = NaturenessRegressionModel(ConvNextModel.from_pretrained("facebook/convnext-tiny-224"))
 
-    trainer.fit(models['all'], dataloaders['all']['train'], dataloaders['all']['val'])
-    trainer.fit(models['nature'], dataloaders['nature']['train'], dataloaders['nature']['val'])
-    trainer.fit(models['urban'], dataloaders['urban']['train'], dataloaders['urban']['val'])
+    # trainer.fit(models['all'], dataloaders['all']['train'], dataloaders['all']['val'])
+    # trainer.fit(models['nature'], dataloaders['nature']['train'], dataloaders['nature']['val'])
+    # trainer.fit(models['urban'], dataloaders['urban']['train'], dataloaders['urban']['val'])
+
+    def train_all(trial):
+        return train_with_trial(trial, image_paths, labels, 'all')
+
+    def train_nature(trial):
+        return train_with_trial(trial, nature_image_paths, nature_labels, 'nature')
+
+    def train_urban(trial):
+        return train_with_trial(trial, urban_image_paths, urban_labels, 'urban')
+
+    for objective in [train_all, train_nature, train_urban]:
+        study = optuna.create_study(direction='minimize')
+        study.optimize(objective, n_trials=25)
+        print(f'Study value: {study.best_value}\nStudy best params: {study.best_params}')
 
     # Eval
-    trainer.test(models['all'], dataloaders['all']['test'])
-    trainer.test(models['nature'], dataloaders['nature']['test'])
-    trainer.test(models['urban'], dataloaders['urban']['test'])
+    # trainer.test(models['all'], dataloaders['all']['test'])
+    # trainer.test(models['nature'], dataloaders['nature']['test'])
+    # trainer.test(models['urban'], dataloaders['urban']['test'])
+
+    model_types = ['all', 'nature', 'urban']
+    for model_type in model_types:
+        # Get all model checkpoint paths and load the best one
+        best_ckpt_path= None
+        best_loss = None
+        for checkpoint_path in glob.glob(f'checkpoints/{model_type}-*.ckpt'):
+            # * should be the lowest loss value
+            new_loss = float(checkpoint_path.split('=')[-1].replace('.ckpt', ''))
+            if best_loss is None or new_loss < best_loss:
+                best_ckpt_path = checkpoint_path
+                best_loss = new_loss
+        models[model_type] = LightningModule.load_from_checkpoint(best_ckpt_path)
 
     # Compare predicted and actual values
     for model_type, model in models.items():
+        # Save the model
+        torch.save(model.state_dict(), f'natureness_model_{model_type}.pth')
         model.eval()
         for m_type in model_types:
             # Show example images with their predicted and actual values
@@ -264,9 +307,6 @@ def main():
                 plt.title(f"Model type: {model_type}, Dataset: {m_type}\nPredicted: {y_pred:.2f}, Actual: {y:.2f}")
                 plt.show()
                 plt.savefig(f"example_{i}_model_{model_type}_data_{m_type}.png")
-
-        # Save the model
-        torch.save(model.state_dict(), f'natureness_model_{model_type}.pth')
 
 if __name__ == '__main__':
     main()
