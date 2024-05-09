@@ -152,14 +152,21 @@ def load_data(data_dir):
     image_paths = glob.glob(os.path.join(data_dir, '**', '*.webp'), recursive=True)
     xml_paths = glob.glob(os.path.join(data_dir, '**', '*.xml'), recursive=True)
     labels = []
-    for xml_path in xml_paths:
+    invalid_image_indices = []
+    for index, xml_path in enumerate(xml_paths):
         filename, bndbox_areas = parse_xml_for_bndbox_areas(xml_path)
         # Find filename in image_paths and get the index (image_path can be in subdirectories)
         # index = [i for i, path in enumerate(image_paths) if path.endswith(filename)][0]
-        labels.append(calculate_natureness_score(bndbox_areas))
-    print(f"Loaded {len(image_paths)} images and {len(labels)} labels")
+        try:
+            labels.append(calculate_natureness_score(bndbox_areas))
+        except ZeroDivisionError:
+            invalid_image_indices.append(index)
+    # Remove invalid images
+    for index in sorted(invalid_image_indices, reverse=True):
+        image_paths.pop(index)
+    print(f"Loaded {len(image_paths)} images and {len(labels)} labels (removed {len(invalid_image_indices)} invalid images)")
     labels = np.array(labels).astype(np.float32)
-    return train_test_split(image_paths, labels, test_size=0.2, random_state=42)
+    return image_paths, labels
 
 def create_dataloaders(train_data, val_data, test_data, batch_size, num_workers):
     train_transform = transforms.Compose([
@@ -198,45 +205,73 @@ def main():
     batch_size = 16
     num_workers = os.cpu_count() or 1
 
-    x_train, x_test, y_train, y_test = load_data(data_dir)
-    x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
+    image_paths, labels = load_data(data_dir)
 
-    dataloaders = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, num_workers)
+    # Choose a primary threshold based on percentiles or fixed value
+    primary_threshold = np.percentile(labels, 50)  # 50th percentile or 0.5
 
-    model = NaturenessRegressionModel(ConvNextModel.from_pretrained("facebook/convnext-tiny-224"))
+    # Probabilities for selection in nature group
+    # You can adjust the steepness and center of this sigmoid function
+    nature_probabilities = 1 / (1 + np.exp(-25 * (labels - primary_threshold)))
+
+    # Randomly select indices based on calculated probabilities
+    nature_mask = np.random.rand(*labels.shape) < nature_probabilities
+    urban_mask = ~nature_mask
+
+    nature_indices = np.where(nature_mask)[0]
+    urban_indices = np.where(urban_mask)[0]
+
+    plt.hist(labels[nature_indices], bins=100, alpha=0.5, label='Nature')
+    plt.hist(labels[urban_indices], bins=100, alpha=0.5, label='Urban')
+    plt.legend()
+    plt.show()
+
+    nature_image_paths = image_paths[nature_indices]
+    nature_labels = labels[nature_indices]
+    urban_image_paths = image_paths[urban_indices]
+    urban_labels = labels[urban_indices]
 
     trainer = Trainer(max_epochs=25)
-    trainer.fit(model, dataloaders['train'], dataloaders['val'])
+
+    dataloaders = {}
+    models = {}
+    model_types = ['all', 'nature', 'urban']
+    inputs_targets = [(image_paths, labels), (nature_image_paths, nature_labels), (urban_image_paths, urban_labels)]
+    for model_type, (data, target) in zip(model_types, inputs_targets):
+        x_train, x_test, y_train, y_test = train_test_split(data, target, test_size=0.2, random_state=42)
+        x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
+        dataloaders[model_type] = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, num_workers)
+        models[model_type] = NaturenessRegressionModel(ConvNextModel.from_pretrained("facebook/convnext-tiny-224"))
+
+    trainer.fit(models['all'], dataloaders['all']['train'], dataloaders['all']['val'])
+    trainer.fit(models['nature'], dataloaders['nature']['train'], dataloaders['nature']['val'])
+    trainer.fit(models['urban'], dataloaders['urban']['train'], dataloaders['urban']['val'])
 
     # Eval
-    trainer.test(model, dataloaders['test'])
+    trainer.test(models['all'], dataloaders['all']['test'])
+    trainer.test(models['nature'], dataloaders['nature']['test'])
+    trainer.test(models['urban'], dataloaders['urban']['test'])
 
     # Compare predicted and actual values
-    model.eval()
-    y_pred = []
-    y_true = []
-    for x, y in dataloaders['test']:
-        y_pred.extend(model(x).tolist())
-        y_true.extend(y.tolist())
+    for model_type, model in models.items():
+        model.eval()
+        y_pred = []
+        y_true = []
+        for x, y in dataloaders['test']:
+            y_pred.extend(model(x).tolist())
+            y_true.extend(y.tolist())
 
-    # Show example images with their predicted and actual values
-    for i in range(5):
-        x, y = dataloaders['test'].dataset[i]
-        y_pred = model(x.unsqueeze(0)).item()
-        plt.imshow(x.permute(1, 2, 0))
-        plt.title(f"Predicted: {y_pred:.2f}, Actual: {y:.2f}")
-        plt.show()
+        # Show example images with their predicted and actual values
+        for i in range(5):
+            x, y = dataloaders[model_type]['test'].dataset[i]
+            y_pred = model(x.unsqueeze(0)).item()
+            plt.imshow(x.permute(1, 2, 0))
+            plt.title(f"Model type: {model_type}\nPredicted: {y_pred:.2f}, Actual: {y:.2f}")
+            plt.show()
+            plt.savefig(f"example_{i}.png")
 
-    # Save 5 pictures with their predicted and actual values
-    for i in range(5):
-        x, y = dataloaders['test'].dataset[i]
-        y_pred = model(x.unsqueeze(0)).item()
-        plt.imshow(x.permute(1, 2, 0))
-        plt.title(f"Predicted: {y_pred:.2f}, Actual: {y:.2f}")
-        plt.savefig(f"example_{i}.png")
-
-    # Save the model
-    torch.save(model.state_dict(), 'natureness_model.pth')
+        # Save the model
+        torch.save(model.state_dict(), f'natureness_model_{model_type}.pth')
 
 if __name__ == '__main__':
     main()

@@ -153,6 +153,7 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
         save_thread.start()
 
     def save_images_and_annotations(self) -> None:
+        epoch_seconds = int(time.time())
         for i, (image_data, bboxes) in enumerate(zip(self.image_cache, self.bbox_cache)):
             image_folder = 'data/images'
             annotations_folder = 'data/annotations'
@@ -160,7 +161,7 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
             os.makedirs(annotations_folder, exist_ok=True)
 
             # Save image, overwriting previous images
-            image_filename = f"image_{self.images_saved:04d}.webp"
+            image_filename = f"image_{epoch_seconds}_{self.images_saved:04d}.webp"
             image_filepath = os.path.join(image_folder, image_filename)
             if os.path.exists(image_filepath):
                 os.remove(image_filepath)
@@ -171,7 +172,7 @@ class ImageDataGenerationStrategy(DataGenerationStrategy):
             annotation_xml = Camera.export_bounding_boxes_xml(bboxes, filename=image_filename, size=(*self.image_resolution, 3))
 
             # Save XML annotation, overwriting previous images
-            annotation_filename = f"annotation_{self.images_saved:04d}.xml"
+            annotation_filename = f"annotation_{epoch_seconds}_{self.images_saved:04d}.xml"
             annotation_filepath = os.path.join(annotations_folder, annotation_filename)
             if os.path.exists(annotation_filepath):
                 os.remove(annotation_filepath)
