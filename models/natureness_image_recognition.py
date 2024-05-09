@@ -6,6 +6,8 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
+import torchvision.models as models
+from torch.profiler import profile, record_function, ProfilerActivity
 from transformers import ConvNextModel
 from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, Callback
@@ -24,15 +26,15 @@ class NaturnessDataset(Dataset):
         # Load images
         # self.images = [webp.load_image(path).convert('RGB') for path in image_paths]
         self.images = images
-        # Transform images
-        if transform:
-            self.images = [transform(image) for image in self.images]
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        return self.images[idx], self.labels[idx]
+        image = self.images[idx]
+        if self.transform:
+            image = self.transform(image)
+        return image, self.labels[idx]
 
 class NaturenessRegressionModel(LightningModule):
     def __init__(self, backbone, freeze_backbone=False, optimizer=None, scheduler=None):
@@ -216,7 +218,7 @@ class TrialReportCallback(Callback):
 
 def train_with_trial(trial, dataloader, model_type):
     backbone = ConvNextModel.from_pretrained("facebook/convnext-tiny-224")
-    trainer = Trainer(max_epochs=50, callbacks=[EarlyStopping(monitor='val_loss', patience=5), ModelCheckpoint(dirpath='checkpoints/', filename=model_type + '-{val_loss:.2f}', save_top_k=1), TrialReportCallback(trial)], num_sanity_val_steps=0)
+    trainer = Trainer(max_epochs=50, callbacks=[EarlyStopping(monitor='val_loss', patience=5), ModelCheckpoint(dirpath='checkpoints/', filename=model_type + '-{val_loss:.4f}', save_top_k=1), TrialReportCallback(trial)], num_sanity_val_steps=0)
     learning_rate = trial.suggest_loguniform('learning_rate', 1e-5, 1e-2)
     optimizer = torch.optim.Adam(lr=learning_rate, params=backbone.parameters())
     t_max = trial.suggest_int('t_max', 50, 200)
@@ -233,7 +235,7 @@ def main():
     num_workers = os.cpu_count() or 1
 
     all_image_paths, all_labels = load_data(data_dir)
-    all_images = np.array([webp.load_image(path).convert('RGB') for path in all_image_paths])
+    all_images = [webp.load_image(path).convert('RGB') for path in all_image_paths]
 
     # Choose a primary threshold based on percentiles or fixed value
     primary_threshold = np.percentile(all_labels, 50)  # 50th percentile or 0.5
@@ -254,9 +256,9 @@ def main():
     plt.legend()
     plt.show()
 
-    nature_images = all_images[nature_indices]
+    nature_images = [all_images[i] for i in nature_indices]
     nature_labels = all_labels[nature_indices]
-    urban_images = all_images[urban_indices]
+    urban_images = [all_images[i] for i in urban_indices]
     urban_labels = all_labels[urban_indices]
 
     dataloaders = {}
@@ -289,10 +291,17 @@ def main():
         return train_with_trial(trial, dataloader, 'urban')
 
     torch.set_float32_matmul_precision('medium')
-    for objective in [train_all, train_nature, train_urban]:
-        study = optuna.create_study(direction='minimize')
-        study.optimize(objective, n_trials=25)
-        print(f'Study value: {study.best_value}\nStudy best params: {study.best_params}')
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
+        with record_function("model_inference"):
+            for objective in [train_all, train_nature, train_urban]:
+                study = optuna.create_study(direction='minimize')
+                study.optimize(objective, n_trials=1)
+                print(f'Study value: {study.best_value}\nStudy best params: {study.best_params}')
+
+            print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+            print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+            print(prof.key_averages().table(sort_by="cpu_memory_usage", row_limit=10))
+            prof.export_chrome_trace("trace.json")
 
     # Eval
     # trainer.test(models['all'], dataloaders['all']['test'])
@@ -305,7 +314,11 @@ def main():
         best_loss = None
         for checkpoint_path in glob.glob(f'checkpoints/{model_type}-*.ckpt'):
             # * should be the lowest loss value
-            new_loss = float(checkpoint_path.split('=')[-1].replace('.ckpt', ''))
+            new_loss = checkpoint_path.split('=')[-1].replace('.ckpt', '')
+            if new_loss.find('-v') != -1:
+                new_loss = float(new_loss.split('-v')[0])
+            else:
+                new_loss = float(new_loss)
             if best_loss is None or new_loss < best_loss:
                 best_ckpt_path = checkpoint_path
                 best_loss = new_loss
