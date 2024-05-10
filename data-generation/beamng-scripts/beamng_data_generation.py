@@ -69,12 +69,12 @@ def generate_data(
 def main():
     set_up_simple_logging()
 
-    number_of_simulations = 2
+    number_of_simulations = 10
     number_of_iterations = 20
 
     # Image generation
     number_of_vehicles_in_traffic = 6
-    image_per_iteration = 20
+    image_per_iteration = 10
     # 4 simulations * 50 iterations * 20 images = 4000 images generated overall
 
     # IMU generation
