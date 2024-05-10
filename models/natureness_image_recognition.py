@@ -6,10 +6,9 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
-import torchvision.models as models
 from torch.profiler import profile, record_function, ProfilerActivity
 from transformers import ConvNextModel
-from lightning import LightningModule, Trainer
+from lightning import LightningModule, Trainer, LightningDataModule
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, Callback
 import webp
 from sklearn.model_selection import train_test_split
@@ -20,25 +19,45 @@ import math
 import optuna
 
 class NaturnessDataset(Dataset):
-    def __init__(self, images, labels, transform=None):
+    def __init__(self, image_paths, labels, transform=None):
         self.labels = labels
         self.transform = transform
         # Load images
         # self.images = [webp.load_image(path).convert('RGB') for path in image_paths]
-        self.images = images
+        self.image_paths = image_paths
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        image = self.images[idx]
+        image = webp.load_image(self.image_paths[idx]).convert('RGB')
         if self.transform:
             image = self.transform(image)
         return image, self.labels[idx]
 
-class NaturenessRegressionModel(LightningModule):
-    def __init__(self, backbone, freeze_backbone=False, optimizer=None, scheduler=None):
+class NaturenessDataModule(LightningDataModule):
+    def __init__(self, image_paths, labels, batch_size, num_workers):
         super().__init__()
+        self.image_paths = image_paths
+        self.labels = labels
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
+    def setup(self, stage=None):
+        x_train, x_test, y_train, y_test = train_test_split(self.image_paths, self.labels, test_size=0.2, random_state=42)
+        x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
+        self.dataloaders = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), self.batch_size, self.num_workers)
+
+    def train_dataloader(self):
+        return self.dataloaders['train']
+    def val_dataloader(self):
+        return self.dataloaders['val']
+    def test_dataloader(self):
+        return self.dataloaders['test']
+class NaturenessRegressionModel(LightningModule):
+    def __init__(self, backbone=None, freeze_backbone=False, optimizer=None, scheduler=None):
+        super().__init__()
+        self.save_hyperparameters(backbone, freeze_backbone, optimizer, scheduler)
         self.backbone = backbone
         if freeze_backbone:
             for param in self.backbone.parameters():
@@ -216,7 +235,7 @@ class TrialReportCallback(Callback):
         if self.trial.should_prune():
             raise optuna.TrialPruned()
 
-def train_with_trial(trial, dataloader, model_type):
+def train_with_trial(trial, datamodule, model_type):
     backbone = ConvNextModel.from_pretrained("facebook/convnext-tiny-224")
     trainer = Trainer(max_epochs=50, callbacks=[EarlyStopping(monitor='val_loss', patience=5), ModelCheckpoint(dirpath='checkpoints/', filename=model_type + '-{val_loss:.4f}', save_top_k=1), TrialReportCallback(trial)], num_sanity_val_steps=0)
     learning_rate = trial.suggest_loguniform('learning_rate', 1e-5, 1e-2)
@@ -224,10 +243,18 @@ def train_with_trial(trial, dataloader, model_type):
     t_max = trial.suggest_int('t_max', 50, 200)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
     model = NaturenessRegressionModel(backbone, optimizer=optimizer, scheduler=scheduler)
-    trainer.fit(model, dataloader['train'], dataloader['val'])
-    test = trainer.test(model, dataloader['test'])
+    trainer.fit(model, datamodule=datamodule)
+    test = trainer.test(model, datamodule=datamodule)
+    torch.save(model.state_dict(), f'natureness_model_{model_type}.pth') # Save the newest model
     print(test)
-    return test[0]['test_loss']
+    return test[0]['test_loss'], model
+
+all_model = None
+all_model_loss = None
+urban_model = None
+urban_model_loss = None
+nature_model = None
+nature_model_loss = None
 
 def main():
     data_dir = '../data'
@@ -235,7 +262,7 @@ def main():
     num_workers = os.cpu_count() or 1
 
     all_image_paths, all_labels = load_data(data_dir)
-    all_images = [webp.load_image(path).convert('RGB') for path in all_image_paths]
+    # all_images = [webp.load_image(path).convert('RGB') for path in all_image_paths]
 
     # Choose a primary threshold based on percentiles or fixed value
     primary_threshold = np.percentile(all_labels, 50)  # 50th percentile or 0.5
@@ -254,23 +281,21 @@ def main():
     plt.hist(all_labels[nature_indices], bins=100, alpha=0.5, label='Nature')
     plt.hist(all_labels[urban_indices], bins=100, alpha=0.5, label='Urban')
     plt.legend()
-    plt.show()
+    # plt.show()
 
-    nature_images = [all_images[i] for i in nature_indices]
+    nature_images = [all_image_paths[i] for i in nature_indices]
     nature_labels = all_labels[nature_indices]
-    urban_images = [all_images[i] for i in urban_indices]
+    urban_images = [all_image_paths[i] for i in urban_indices]
     urban_labels = all_labels[urban_indices]
 
-    dataloaders = {}
+    datamodules = {}
     model_types = ['all', 'nature', 'urban']
-    images_and_labels = [(all_images, all_labels), (nature_images, nature_labels), (urban_images, urban_labels)]
+    images_and_labels = [(all_image_paths, all_labels), (nature_images, nature_labels), (urban_images, urban_labels)]
 
     for model_type, (images, labels) in zip(model_types, images_and_labels):
-        dataloaders[model_type] = {}
+        datamodules[model_type] = {}
         for batch_size in [16, 32, 64]:
-            x_train, x_test, y_train, y_test = train_test_split(images, labels, test_size=0.2, random_state=42)
-            x_test, x_val, y_test, y_val = train_test_split(x_test, y_test, test_size=0.5, random_state=42)
-            dataloaders[model_type][batch_size] = create_dataloaders((x_train, y_train), (x_val, y_val), (x_test, y_test), batch_size, num_workers)
+            datamodules[model_type][batch_size] = NaturenessDataModule(images, labels, batch_size, num_workers)
 
     models = {}
 
@@ -279,64 +304,96 @@ def main():
     # trainer.fit(models['urban'], dataloaders['urban']['train'], dataloaders['urban']['val'])
 
     def train_all(trial):
-        dataloader = dataloaders['all'][trial.suggest_categorical('batch_size', [16, 32, 64])]
-        return train_with_trial(trial, dataloader, 'all')
+        global all_model, all_model_loss
+        datamodule = datamodules['all'][trial.suggest_categorical('batch_size', [16, 32, 64])]
+        loss, model = train_with_trial(trial, datamodule, 'all')
+        if all_model_loss is None or loss < all_model_loss:
+            all_model = model
+            all_model_loss = loss
+        return loss
 
     def train_nature(trial):
-        dataloader = dataloaders['nature'][trial.suggest_categorical('batch_size', [16, 32, 64])]
-        return train_with_trial(trial, dataloader, 'nature')
+        global nature_model, nature_model_loss
+        datamodule = datamodules['nature'][trial.suggest_categorical('batch_size', [16, 32, 64])]
+        loss, model = train_with_trial(trial, datamodule, 'nature')
+        if nature_model_loss is None or loss < nature_model_loss:
+            nature_model = model
+            nature_model_loss = loss
+        return loss
 
     def train_urban(trial):
-        dataloader = dataloaders['urban'][trial.suggest_categorical('batch_size', [16, 32, 64])]
-        return train_with_trial(trial, dataloader, 'urban')
+        global urban_model, urban_model_loss
+        datamodule = datamodules['urban'][trial.suggest_categorical('batch_size', [16, 32, 64])]
+        loss, model = train_with_trial(trial, datamodule, 'urban')
+        if urban_model_loss is None or loss < urban_model_loss:
+            urban_model = model
+            urban_model_loss = loss
+        return loss
 
     torch.set_float32_matmul_precision('medium')
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
-        with record_function("model_inference"):
-            for objective in [train_all, train_nature, train_urban]:
-                study = optuna.create_study(direction='minimize')
-                study.optimize(objective, n_trials=1)
-                print(f'Study value: {study.best_value}\nStudy best params: {study.best_params}')
+    # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
+    #     with record_function("model_inference"):
+    #         for objective in [train_all, train_nature, train_urban]:
+    #             study = optuna.create_study(direction='minimize')
+    #             study.optimize(objective, n_trials=1)
+    #             print(f'Study value: {study.best_value}\nStudy best params: {study.best_params}')
 
-            print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
-            print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-            print(prof.key_averages().table(sort_by="cpu_memory_usage", row_limit=10))
-            prof.export_chrome_trace("trace.json")
+    #         print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+    #         print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+    #         print(prof.key_averages().table(sort_by="cpu_memory_usage", row_limit=10))
+    #         prof.export_chrome_trace("trace.json")
+
+    for objective in [train_all, train_nature, train_urban]:
+        study = optuna.create_study(direction='minimize')
+        study.optimize(objective, n_trials=1)
+        print(f'Study value: {study.best_value}\nStudy best params: {study.best_params}')
 
     # Eval
     # trainer.test(models['all'], dataloaders['all']['test'])
     # trainer.test(models['nature'], dataloaders['nature']['test'])
     # trainer.test(models['urban'], dataloaders['urban']['test'])
 
-    for model_type in model_types:
-        # Get all model checkpoint paths and load the best one
-        best_ckpt_path= None
-        best_loss = None
-        for checkpoint_path in glob.glob(f'checkpoints/{model_type}-*.ckpt'):
-            # * should be the lowest loss value
-            new_loss = checkpoint_path.split('=')[-1].replace('.ckpt', '')
-            if new_loss.find('-v') != -1:
-                new_loss = float(new_loss.split('-v')[0])
-            else:
-                new_loss = float(new_loss)
-            if best_loss is None or new_loss < best_loss:
-                best_ckpt_path = checkpoint_path
-                best_loss = new_loss
-        models[model_type] = LightningModule.load_from_checkpoint(best_ckpt_path)
+    # for model_type in model_types:
+    #     # Get all model checkpoint paths and load the best one
+    #     best_ckpt_path= None
+    #     best_loss = None
+    #     for checkpoint_path in glob.glob(f'checkpoints/{model_type}-*.ckpt'):
+    #         # * should be the lowest loss value
+    #         new_loss = checkpoint_path.split('=')[-1].replace('.ckpt', '')
+    #         if new_loss.find('-v') != -1:
+    #             new_loss = float(new_loss.split('-v')[0])
+    #         else:
+    #             new_loss = float(new_loss)
+    #         if best_loss is None or new_loss < best_loss:
+    #             best_ckpt_path = checkpoint_path
+    #             best_loss = new_loss
+    #     # models[model_type] = LightningModule.load_from_checkpoint(best_ckpt_path)
+    #     # models[model_type] = NaturenessRegressionModel.load_from_checkpoint(best_ckpt_path, backbone=ConvNextModel.from_pretrained("facebook/convnext-tiny-224"))
+    #     models[model_type] = NaturenessRegressionModel.load_from_checkpoint(best_ckpt_path, strict=False)
+    #     # models[model_type] = NaturenessRegressionModel()
+    #     # models[model_type].load_state_dict(torch.load(f'natureness_model_{model_type}.pth'), strict=False)
+    #     models[model_type].eval()
+
+    models = {
+        'all': all_model,
+        'nature': nature_model,
+        'urban': urban_model
+    }
 
     # Compare predicted and actual values
     for model_type, model in models.items():
         # Save the model
-        torch.save(model.state_dict(), f'natureness_model_{model_type}.pth')
-        model.eval()
+        # torch.save(model.state_dict(), f'natureness_model_{model_type}.pth')
+        # model.eval()
         for m_type in model_types:
             # Show example images with their predicted and actual values
-            for i in range(4):
-                x, y = dataloaders[m_type]['test'].dataset[i]
+            for i in range(8):
+                datamodules[m_type][16].setup()
+                x, y = datamodules[m_type][16].test_dataloader().dataset[i]
                 y_pred = model(x.unsqueeze(0)).item()
                 plt.imshow(x.permute(1, 2, 0))
                 plt.title(f"Model type: {model_type}, Dataset: {m_type}\nPredicted: {y_pred:.2f}, Actual: {y:.2f}")
-                plt.show()
+                # plt.show()
                 plt.savefig(f"example_{i}_model_{model_type}_data_{m_type}.png")
 
 if __name__ == '__main__':
