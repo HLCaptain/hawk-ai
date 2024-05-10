@@ -243,7 +243,7 @@ def scores(y_true, y_pred, cutoff=0.7):
     Dice = 2* np.sum(np.multiply(y_pred, y_true))/(np.sum(y_pred)*np.sum(y_true))
     
     #for data_type in ['nature', 'city']:
-    tp, fp, fn, tn  = metrics.confusion_matrix(y_true_classes, y_pred_classes).ravel()
+    tn, fp, fn, tp  = metrics.confusion_matrix(y_true_classes, y_pred_classes).ravel()
     #roc_curve(test, pred, drop_intermediate=False)
     #print(tp, fp, fn, tn)
     IoU = tp / (tp+fn+fp)
