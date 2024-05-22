@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 import re
 import math
 import optuna
+import pandas as pd
 
 class NaturnessDataset(Dataset):
     def __init__(self, image_paths, labels, transform=None):
@@ -237,8 +238,8 @@ class TrialReportCallback(Callback):
 
 def train_with_trial(trial, datamodule, model_type):
     backbone = ConvNextModel.from_pretrained("facebook/convnext-tiny-224")
-    trainer = Trainer(max_epochs=50, callbacks=[EarlyStopping(monitor='val_loss', patience=5), ModelCheckpoint(dirpath='checkpoints/', filename=model_type + '-{val_loss:.4f}', save_top_k=1), TrialReportCallback(trial)], num_sanity_val_steps=0)
-    learning_rate = trial.suggest_loguniform('learning_rate', 1e-5, 1e-2)
+    trainer = Trainer(max_epochs=10, callbacks=[EarlyStopping(monitor='val_loss', patience=5), ModelCheckpoint(dirpath='checkpoints/', filename=model_type + '-{val_loss:.4f}', save_top_k=1), TrialReportCallback(trial)], num_sanity_val_steps=0)
+    learning_rate = trial.suggest_loguniform('learning_rate', 1e-4, 1e-2)
     optimizer = torch.optim.Adam(lr=learning_rate, params=backbone.parameters())
     t_max = trial.suggest_int('t_max', 50, 200)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
@@ -249,27 +250,32 @@ def train_with_trial(trial, datamodule, model_type):
     print(test)
     return test[0]['test_loss'], model
 
-all_model = None
-all_model_loss = None
-urban_model = None
-urban_model_loss = None
-nature_model = None
-nature_model_loss = None
-
-def main():
-    data_dir = '../data'
-
+def train_eval_save(image_paths, labels, batch_sizes=[16, 32, 64]):
     num_workers = os.cpu_count() or 1
+    datamodules = {}
+    for batch_size in batch_sizes:
+        datamodules[batch_size] = NaturenessDataModule(image_paths, labels, batch_size, num_workers)
+    study = optuna.create_study(direction='minimize')
+    def train_all(trial):
+        global all_model, all_model_loss
+        datamodule = datamodules[trial.suggest_categorical('batch_size', batch_sizes)]
+        loss, model = train_with_trial(trial, datamodule, 'all')
+        if all_model_loss is None or loss < all_model_loss:
+            all_model = model
+            all_model_loss = loss
+        return loss
+    torch.set_float32_matmul_precision('medium')
+    study.optimize(train_all, n_trials=1)
+    print(f'Study value: {study.best_value}\nStudy best params: {study.best_params}')
+    return all_model, datamodules
 
-    all_image_paths, all_labels = load_data(data_dir)
-    # all_images = [webp.load_image(path).convert('RGB') for path in all_image_paths]
-
+def train_eval_save_nature_urban(all_image_paths, all_labels, percentile=50, uniformity=25):
     # Choose a primary threshold based on percentiles or fixed value
-    primary_threshold = np.percentile(all_labels, 50)  # 50th percentile or 0.5
+    primary_threshold = np.percentile(all_labels, percentile)  # 50th percentile or 0.5
 
     # Probabilities for selection in nature group
     # You can adjust the steepness and center of this sigmoid function
-    nature_probabilities = 1 / (1 + np.exp(-25 * (all_labels - primary_threshold)))
+    nature_probabilities = 1 / (1 + np.exp(-uniformity * (all_labels - primary_threshold)))
 
     # Randomly select indices based on calculated probabilities
     nature_mask = np.random.rand(*all_labels.shape) < nature_probabilities
@@ -278,9 +284,9 @@ def main():
     nature_indices = np.where(nature_mask)[0]
     urban_indices = np.where(urban_mask)[0]
 
-    plt.hist(all_labels[nature_indices], bins=100, alpha=0.5, label='Nature')
-    plt.hist(all_labels[urban_indices], bins=100, alpha=0.5, label='Urban')
-    plt.legend()
+    # plt.hist(all_labels[nature_indices], bins=100, alpha=0.5, label='Nature')
+    # plt.hist(all_labels[urban_indices], bins=100, alpha=0.5, label='Urban')
+    # plt.legend()
     # plt.show()
 
     nature_images = [all_image_paths[i] for i in nature_indices]
@@ -289,112 +295,114 @@ def main():
     urban_labels = all_labels[urban_indices]
 
     datamodules = {}
-    model_types = ['all', 'nature', 'urban']
-    images_and_labels = [(all_image_paths, all_labels), (nature_images, nature_labels), (urban_images, urban_labels)]
-
-    for model_type, (images, labels) in zip(model_types, images_and_labels):
-        datamodules[model_type] = {}
-        for batch_size in [16, 32, 64]:
-            datamodules[model_type][batch_size] = NaturenessDataModule(images, labels, batch_size, num_workers)
-
-    models = {}
-
-    # trainer.fit(models['all'], dataloaders['all']['train'], dataloaders['all']['val'])
-    # trainer.fit(models['nature'], dataloaders['nature']['train'], dataloaders['nature']['val'])
-    # trainer.fit(models['urban'], dataloaders['urban']['train'], dataloaders['urban']['val'])
-
-    def train_all(trial):
-        global all_model, all_model_loss
-        datamodule = datamodules['all'][trial.suggest_categorical('batch_size', [16, 32, 64])]
-        loss, model = train_with_trial(trial, datamodule, 'all')
-        if all_model_loss is None or loss < all_model_loss:
-            all_model = model
-            all_model_loss = loss
-        return loss
-
-    def train_nature(trial):
-        global nature_model, nature_model_loss
-        datamodule = datamodules['nature'][trial.suggest_categorical('batch_size', [16, 32, 64])]
-        loss, model = train_with_trial(trial, datamodule, 'nature')
-        if nature_model_loss is None or loss < nature_model_loss:
-            nature_model = model
-            nature_model_loss = loss
-        return loss
-
-    def train_urban(trial):
-        global urban_model, urban_model_loss
-        datamodule = datamodules['urban'][trial.suggest_categorical('batch_size', [16, 32, 64])]
-        loss, model = train_with_trial(trial, datamodule, 'urban')
-        if urban_model_loss is None or loss < urban_model_loss:
-            urban_model = model
-            urban_model_loss = loss
-        return loss
+    model_types = ['nature', 'urban']
+    images_and_labels = [(nature_images, nature_labels), (urban_images, urban_labels)]
 
     torch.set_float32_matmul_precision('medium')
-    # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
-    #     with record_function("model_inference"):
-    #         for objective in [train_all, train_nature, train_urban]:
-    #             study = optuna.create_study(direction='minimize')
-    #             study.optimize(objective, n_trials=1)
-    #             print(f'Study value: {study.best_value}\nStudy best params: {study.best_params}')
 
-    #         print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
-    #         print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-    #         print(prof.key_averages().table(sort_by="cpu_memory_usage", row_limit=10))
-    #         prof.export_chrome_trace("trace.json")
+    models = {}
+    for model_type, (images, labels) in zip(model_types, images_and_labels):
+        models[model_type], datamodules[model_type] = train_eval_save(images, labels)
 
-    for objective in [train_all, train_nature, train_urban]:
-        study = optuna.create_study(direction='minimize')
-        study.optimize(objective, n_trials=1)
-        print(f'Study value: {study.best_value}\nStudy best params: {study.best_params}')
+    return models, datamodules
 
-    # Eval
-    # trainer.test(models['all'], dataloaders['all']['test'])
-    # trainer.test(models['nature'], dataloaders['nature']['test'])
-    # trainer.test(models['urban'], dataloaders['urban']['test'])
+all_model = None
+all_model_loss = None
+urban_model = None
+urban_model_loss = None
+nature_model = None
+nature_model_loss = None
+models = {}
+models_loss = {}
 
-    # for model_type in model_types:
-    #     # Get all model checkpoint paths and load the best one
-    #     best_ckpt_path= None
-    #     best_loss = None
-    #     for checkpoint_path in glob.glob(f'checkpoints/{model_type}-*.ckpt'):
-    #         # * should be the lowest loss value
-    #         new_loss = checkpoint_path.split('=')[-1].replace('.ckpt', '')
-    #         if new_loss.find('-v') != -1:
-    #             new_loss = float(new_loss.split('-v')[0])
-    #         else:
-    #             new_loss = float(new_loss)
-    #         if best_loss is None or new_loss < best_loss:
-    #             best_ckpt_path = checkpoint_path
-    #             best_loss = new_loss
-    #     # models[model_type] = LightningModule.load_from_checkpoint(best_ckpt_path)
-    #     # models[model_type] = NaturenessRegressionModel.load_from_checkpoint(best_ckpt_path, backbone=ConvNextModel.from_pretrained("facebook/convnext-tiny-224"))
-    #     models[model_type] = NaturenessRegressionModel.load_from_checkpoint(best_ckpt_path, strict=False)
-    #     # models[model_type] = NaturenessRegressionModel()
-    #     # models[model_type].load_state_dict(torch.load(f'natureness_model_{model_type}.pth'), strict=False)
-    #     models[model_type].eval()
+def main():
+    data_dir = '../data'
 
-    models = {
-        'all': all_model,
-        'nature': nature_model,
-        'urban': urban_model
-    }
+    all_image_paths, all_labels = load_data(data_dir)
+    # all_images = [webp.load_image(path).convert('RGB') for path in all_image_paths]
 
-    # Compare predicted and actual values
-    for model_type, model in models.items():
-        # Save the model
-        # torch.save(model.state_dict(), f'natureness_model_{model_type}.pth')
-        # model.eval()
-        for m_type in model_types:
-            # Show example images with their predicted and actual values
-            for i in range(8):
-                datamodules[m_type][16].setup()
-                x, y = datamodules[m_type][16].test_dataloader().dataset[i]
-                y_pred = model(x.unsqueeze(0)).item()
-                plt.imshow(x.permute(1, 2, 0))
-                plt.title(f"Model type: {model_type}, Dataset: {m_type}\nPredicted: {y_pred:.2f}, Actual: {y:.2f}")
-                # plt.show()
-                plt.savefig(f"example_{i}_model_{model_type}_data_{m_type}.png")
+    all_models = {}
+    all_datamodules = {}
+    uniformities = [10, 25, 40]
+    percentiles = [30, 50, 70]
+
+    # Train single model for all data
+    all_model, all_datamodule = train_eval_save(all_image_paths, all_labels)
+    all_models['all'] = {'all': all_model}
+    all_datamodules['all'] = {'all': all_datamodule}
+    print(f"all_model: {all_model}, all_datamodule: {all_datamodule}")
+
+    # Train models for nature and urban groups
+    for uniformity in uniformities:
+        for percentile in percentiles:
+            print(f"Training with percentile: {percentile} and uniformity: {uniformity}")
+            models, datamodules = train_eval_save_nature_urban(all_image_paths, all_labels, percentile, uniformity)
+            config_key = f'p{percentile}_u{uniformity}'
+            all_models[config_key] = models
+            datamodules['all'] = all_datamodule
+            all_datamodules[config_key] = datamodules
+            print(f"models: {models}, datamodules: {datamodules}")
+
+    # Example usage of all_models and all_datamodules
+    dataset_types = ['all', 'nature', 'urban']
+    model_losses = {}
+    for config_key, models in all_models.items():
+        for model_type, model in models.items():
+            datamodules = all_datamodules[config_key]
+            print(f'Datamodules: {datamodules}')
+            for dataset_type in dataset_types:
+                model_losses[(config_key, model_type, dataset_type)] = []
+                for i in range(16):
+                    datamodules[dataset_type][16].setup()
+                    x, y = datamodules[dataset_type][16].test_dataloader().dataset[i]
+                    y_pred = model(x.unsqueeze(0)).item()
+                    model_losses[(config_key, model_type, dataset_type)].append(y_pred)
+                    plt.imshow(x.permute(1, 2, 0))
+                    plt.title(f"Config: {config_key}, Model type: {model_type}, Dataset: {dataset_type}\nPredicted: {y_pred:.2f}, Actual: {y:.2f}")
+                    plt.savefig(f"example_{i}_{config_key}_model_{model_type}_data_{dataset_type}.png")
+
+    pd.DataFrame(model_losses).to_csv('model_losses.csv')
+
+    # Compare model performance
+    for config_key, models in all_models.items():
+        for model_type, model in models.items():
+            for dataset_type in dataset_types:
+                print(f"Config: {config_key}, Model type: {model_type}, Dataset: {dataset_type}")
+                print(f"Mean: {np.mean(model_losses[(config_key, model_type, dataset_type)])}")
+                print(f"Std: {np.std(model_losses[(config_key, model_type, dataset_type)])}")
+                plt.hist(model_losses[(config_key, model_type, dataset_type)], bins=100)
+                plt.savefig(f"hist_{config_key}_model_{model_type}_data_{dataset_type}.png")
+
+
+
+
+    # Compare model performance
+    means = {}
+    std_devs = {}
+    for key in model_losses:
+        config_key, model_type, dataset_type = key
+        means[key] = np.mean(model_losses[key])
+        std_devs[key] = np.std(model_losses[key])
+        # Generate histogram for each configuration
+        plt.figure()
+        plt.hist(model_losses[key], bins=10, alpha=0.75, label=f'{model_type} - {dataset_type}')
+        plt.title(f"Error Distribution for {config_key}")
+        plt.xlabel("Prediction Error")
+        plt.ylabel("Frequency")
+        plt.legend()
+        plt.savefig(f"hist_{config_key}_model_{model_type}_data_{dataset_type}.png")
+
+    # Create comparative plots
+    for config_key in set(k[0] for k in model_losses.keys()):
+        plt.figure()
+        for dataset_type in dataset_types:
+            errors = [means[(config_key, model_type, dataset_type)] for model_type in ['all', 'nature', 'urban']]
+            plt.bar(['all', 'nature', 'urban'], errors, alpha=0.7, label=f'{dataset_type}')
+        plt.title(f'Mean Prediction Errors for {config_key}')
+        plt.xlabel('Model Type')
+        plt.ylabel('Mean Error')
+        plt.legend(title='Dataset Type')
+        plt.savefig(f'comparison_{config_key}.png')
 
 if __name__ == '__main__':
     main()
