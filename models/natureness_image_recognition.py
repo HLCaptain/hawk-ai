@@ -328,8 +328,6 @@ def main():
 
     # Train single model for all data
     all_model, all_datamodule = train_eval_save(all_image_paths, all_labels)
-    all_models['all'] = {'all': all_model}
-    all_datamodules['all'] = {'all': all_datamodule}
     print(f"all_model: {all_model}, all_datamodule: {all_datamodule}")
 
     # Train models for nature and urban groups
@@ -338,6 +336,7 @@ def main():
             print(f"Training with percentile: {percentile} and uniformity: {uniformity}")
             models, datamodules = train_eval_save_nature_urban(all_image_paths, all_labels, percentile, uniformity)
             config_key = f'p{percentile}_u{uniformity}'
+            models['all'] = all_model
             all_models[config_key] = models
             datamodules['all'] = all_datamodule
             all_datamodules[config_key] = datamodules
