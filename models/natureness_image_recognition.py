@@ -246,11 +246,11 @@ def train_with_trial(trial, datamodule, model_type):
     model = NaturenessRegressionModel(backbone, optimizer=optimizer, scheduler=scheduler)
     trainer.fit(model, datamodule=datamodule)
     test = trainer.test(model, datamodule=datamodule)
-    torch.save(model.state_dict(), f'natureness_model_{model_type}.pth') # Save the newest model
+    # torch.save(model.state_dict(), f'natureness_model_{model_type}.pth') # Save the newest model
     print(test)
     return test[0]['test_loss'], model
 
-def train_eval_save(image_paths, labels, batch_sizes=[16, 32, 64]):
+def train_eval_save(image_paths, labels, batch_sizes=[16, 32, 64], model_type='all'):
     num_workers = os.cpu_count() or 1
     datamodules = {}
     for batch_size in batch_sizes:
@@ -259,7 +259,7 @@ def train_eval_save(image_paths, labels, batch_sizes=[16, 32, 64]):
     def train_all(trial):
         global all_model, all_model_loss
         datamodule = datamodules[trial.suggest_categorical('batch_size', batch_sizes)]
-        loss, model = train_with_trial(trial, datamodule, 'all')
+        loss, model = train_with_trial(trial, datamodule, model_type)
         if all_model_loss is None or loss < all_model_loss:
             all_model = model
             all_model_loss = loss
@@ -302,7 +302,7 @@ def train_eval_save_nature_urban(all_image_paths, all_labels, percentile=50, uni
 
     models = {}
     for model_type, (images, labels) in zip(model_types, images_and_labels):
-        models[model_type], datamodules[model_type] = train_eval_save(images, labels)
+        models[model_type], datamodules[model_type] = train_eval_save(images, labels, model_type=model_type)
 
     return models, datamodules
 
@@ -327,7 +327,7 @@ def main():
     percentiles = [30, 50, 70]
 
     # Train single model for all data
-    all_model, all_datamodule = train_eval_save(all_image_paths, all_labels)
+    all_model, all_datamodule = train_eval_save(all_image_paths, all_labels, model_type='all')
     print(f"all_model: {all_model}, all_datamodule: {all_datamodule}")
 
     # Train models for nature and urban groups
@@ -358,7 +358,7 @@ def main():
                     model_losses[(config_key, model_type, dataset_type)].append(y_pred)
                     plt.imshow(x.permute(1, 2, 0))
                     plt.title(f"Config: {config_key}, Model type: {model_type}, Dataset: {dataset_type}\nPredicted: {y_pred:.2f}, Actual: {y:.2f}")
-                    plt.savefig(f"example_{i}_{config_key}_model_{model_type}_data_{dataset_type}.png")
+                    plt.savefig(f"output/example_{i}_{config_key}_model_{model_type}_data_{dataset_type}.png")
 
     pd.DataFrame(model_losses).to_csv('model_losses.csv')
 
@@ -370,7 +370,7 @@ def main():
                 print(f"Mean: {np.mean(model_losses[(config_key, model_type, dataset_type)])}")
                 print(f"Std: {np.std(model_losses[(config_key, model_type, dataset_type)])}")
                 plt.hist(model_losses[(config_key, model_type, dataset_type)], bins=100)
-                plt.savefig(f"hist_{config_key}_model_{model_type}_data_{dataset_type}.png")
+                plt.savefig(f"output/hist_{config_key}_model_{model_type}_data_{dataset_type}.png")
 
 
 
@@ -389,7 +389,7 @@ def main():
         plt.xlabel("Prediction Error")
         plt.ylabel("Frequency")
         plt.legend()
-        plt.savefig(f"hist_{config_key}_model_{model_type}_data_{dataset_type}.png")
+        plt.savefig(f"output/comparison_hist_{config_key}_model_{model_type}_data_{dataset_type}.png")
 
     # Create comparative plots
     for config_key in set(k[0] for k in model_losses.keys()):
@@ -401,7 +401,7 @@ def main():
         plt.xlabel('Model Type')
         plt.ylabel('Mean Error')
         plt.legend(title='Dataset Type')
-        plt.savefig(f'comparison_{config_key}.png')
+        plt.savefig(f'output/comparison_{config_key}.png')
 
 if __name__ == '__main__':
     main()
