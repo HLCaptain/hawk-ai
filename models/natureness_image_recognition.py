@@ -250,15 +250,17 @@ def train_with_trial(trial, datamodule, model_type):
     print(test)
     return test[0]['test_loss'], model
 
-def train_eval_save(image_paths, labels, batch_sizes=[16, 32, 64], model_type='all'):
+def train_eval_save(image_paths, labels, model_type='all'):
+    global all_model, all_model_loss
+    all_model_loss = None
+    all_model = None
     num_workers = os.cpu_count() or 1
     datamodules = {}
-    for batch_size in batch_sizes:
-        datamodules[batch_size] = NaturenessDataModule(image_paths, labels, batch_size, num_workers)
+    datamodules[32] = NaturenessDataModule(image_paths, labels, 32, num_workers)
     study = optuna.create_study(direction='minimize')
     def train_all(trial):
         global all_model, all_model_loss
-        datamodule = datamodules[trial.suggest_categorical('batch_size', batch_sizes)]
+        datamodule = datamodules[32]
         loss, model = train_with_trial(trial, datamodule, model_type)
         if all_model_loss is None or loss < all_model_loss:
             all_model = model
@@ -344,47 +346,52 @@ def main():
 
     # Example usage of all_models and all_datamodules
     dataset_types = ['all', 'nature', 'urban']
-    model_losses = {}
+    model_predictions = {}
+    image_actuals = {}
     for config_key, models in all_models.items():
-        for model_type, model in models.items():
-            datamodules = all_datamodules[config_key]
-            print(f'Datamodules: {datamodules}')
-            for dataset_type in dataset_types:
-                model_losses[(config_key, model_type, dataset_type)] = []
+        for dataset_type in dataset_types:
+            image_actuals[(config_key, dataset_type)] = []
+            xes = []
+            for i in range(16):
+                datamodules[dataset_type][32].setup()
+                x, y = datamodules[dataset_type][32].test_dataloader().dataset[i]
+                image_actuals[(config_key, dataset_type)].append(y)
+                xes.append(x)
+            for model_type, model in models.items():
+                datamodules = all_datamodules[config_key]
+                print(f'Datamodules: {datamodules}')
+                model_predictions[(config_key, model_type, dataset_type)] = []
                 for i in range(16):
-                    datamodules[dataset_type][16].setup()
-                    x, y = datamodules[dataset_type][16].test_dataloader().dataset[i]
-                    y_pred = model(x.unsqueeze(0)).item()
-                    model_losses[(config_key, model_type, dataset_type)].append(y_pred)
+                    y_pred = model(xes[i].unsqueeze(0)).item()
+                    model_predictions[(config_key, model_type, dataset_type)].append(y_pred)
                     plt.imshow(x.permute(1, 2, 0))
                     plt.title(f"Config: {config_key}, Model type: {model_type}, Dataset: {dataset_type}\nPredicted: {y_pred:.2f}, Actual: {y:.2f}")
                     plt.savefig(f"output/example_{i}_{config_key}_model_{model_type}_data_{dataset_type}.png")
 
-    pd.DataFrame(model_losses).to_csv('model_losses.csv')
+    pd.DataFrame(model_predictions).to_csv('model_predictions.csv')
+    pd.DataFrame(image_actuals).to_csv('image_actuals.csv')
 
     # Compare model performance
     for config_key, models in all_models.items():
         for model_type, model in models.items():
             for dataset_type in dataset_types:
                 print(f"Config: {config_key}, Model type: {model_type}, Dataset: {dataset_type}")
-                print(f"Mean: {np.mean(model_losses[(config_key, model_type, dataset_type)])}")
-                print(f"Std: {np.std(model_losses[(config_key, model_type, dataset_type)])}")
-                plt.hist(model_losses[(config_key, model_type, dataset_type)], bins=100)
+                print(f"Mean: {np.mean(model_predictions[(config_key, model_type, dataset_type)])}")
+                print(f"Std: {np.std(model_predictions[(config_key, model_type, dataset_type)])}")
+                plt.figure()
+                plt.hist(model_predictions[(config_key, model_type, dataset_type)], bins=100)
                 plt.savefig(f"output/hist_{config_key}_model_{model_type}_data_{dataset_type}.png")
-
-
-
 
     # Compare model performance
     means = {}
     std_devs = {}
-    for key in model_losses:
+    for key in model_predictions:
         config_key, model_type, dataset_type = key
-        means[key] = np.mean(model_losses[key])
-        std_devs[key] = np.std(model_losses[key])
+        means[key] = np.mean(model_predictions[key])
+        std_devs[key] = np.std(model_predictions[key])
         # Generate histogram for each configuration
         plt.figure()
-        plt.hist(model_losses[key], bins=10, alpha=0.75, label=f'{model_type} - {dataset_type}')
+        plt.hist(model_predictions[key], bins=10, alpha=0.75, label=f'{model_type} - {dataset_type}')
         plt.title(f"Error Distribution for {config_key}")
         plt.xlabel("Prediction Error")
         plt.ylabel("Frequency")
@@ -392,7 +399,7 @@ def main():
         plt.savefig(f"output/comparison_hist_{config_key}_model_{model_type}_data_{dataset_type}.png")
 
     # Create comparative plots
-    for config_key in set(k[0] for k in model_losses.keys()):
+    for config_key in set(k[0] for k in model_predictions.keys()):
         plt.figure()
         for dataset_type in dataset_types:
             errors = [means[(config_key, model_type, dataset_type)] for model_type in ['all', 'nature', 'urban']]
